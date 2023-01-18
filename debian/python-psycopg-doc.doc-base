@@ -1,0 +1,9 @@
+Document: python-psycopg-doc
+Title: Python psycopg3’s documentation
+Author: Daniele Varrazzo
+Abstract: PostgreSQL database adapter for Python 3
+Section: Programming/Python
+
+Format: HTML
+Index: /usr/share/doc/python-psycopg-doc/html/index.html
+Files: /usr/share/doc/python-psycopg-doc/html/*.html

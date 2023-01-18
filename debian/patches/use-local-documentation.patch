@@ -1,0 +1,52 @@
+Description: Ensure reproducible documentation
+ Do not fetch external Sphinx inverntory but use one from Debian packages.
+Forwarded: not-needed
+Author: Tomasz Rybak <serpent@debian.org>
+Last-Update: 2022-12-28
+Index: psycopg3/docs/conf.py
+===================================================================
+--- psycopg3.orig/docs/conf.py
++++ psycopg3/docs/conf.py
+@@ -96,8 +96,10 @@ html_static_path = ["_static"]
+ default_role = "obj"
+ 
+ intersphinx_mapping = {
+-    "py": ("https://docs.python.org/3", None),
+-    "pg2": ("https://www.psycopg.org/docs/", None),
++    "py": ("file:///usr/share/doc/python3-doc/html/",
++        "/usr/share/doc/python3-doc/html/objects.inv"),
++    "pg2": ("file:///usr/share/doc/python-psycopg2-doc/html/",
++        "/usr/share/doc/python-psycopg2-doc/html/objects.inv"),
+ }
+ 
+ autodoc_member_order = "bysource"
+ 
+ # PostgreSQL docs version to link libpq functions to
+-libpq_docs_version = "14"
++libpq_docs_version = "15"
+ 
+ # Where to point on :ticket: role
+ ticket_url = "https://github.com/psycopg/psycopg/issues/%s"
+Index: psycopg3/docs/lib/libpq_docs.py
+===================================================================
+--- psycopg3.orig/docs/lib/libpq_docs.py
++++ psycopg3/docs/lib/libpq_docs.py
+@@ -7,6 +7,8 @@ Add the ``:pq:`` role, to create a link
+ 
+ will link to::
+ 
++    file:///usr/share/doc/postgresql-doc-13/html/libpq-misc.html #LIBPQ-PQLIBVERSION
++previously to:
+     https://www.postgresql.org/docs/current/libpq-misc.html #LIBPQ-PQLIBVERSION
+ 
+ """
+@@ -89,8 +91,7 @@ class LibpqReader:
+     app = None
+ 
+     _url_pattern = (
+-        "https://raw.githubusercontent.com/postgres/postgres/REL_{ver}_STABLE"
+-        "/doc/src/sgml/libpq.sgml"
++        "file:///usr/share/doc/postgresql-doc-{version}/html/{section}.html#{func_id}"
+     )
+ 
+     data = None

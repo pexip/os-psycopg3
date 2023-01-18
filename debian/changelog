@@ -1,0 +1,55 @@
+psycopg3 (3.1.7-4) unstable; urgency=medium
+
+  * Add *.pydist files to deal with dh_python psycopg names overrides.
+
+ -- Tomasz Rybak <serpent@debian.org>  Wed, 18 Jan 2023 21:12:00 +0100
+
+psycopg3 (3.1.7-3) unstable; urgency=medium
+
+  * Source-only upload to allow migration to testing.
+
+ -- Tomasz Rybak <serpent@debian.org>  Mon, 16 Jan 2023 20:34:16 +0100
+
+psycopg3 (3.1.7-2) unstable; urgency=medium
+
+  * Rename Debian binary packages to reflect upstream Python package names;
+    (Closes: #1016031).
+
+ -- Tomasz Rybak <serpent@debian.org>  Fri, 13 Jan 2023 13:33:51 +0100
+
+psycopg3 (3.1.7-1) unstable; urgency=medium
+
+  [ Tomasz Rybak ]
+  * New upstream version 3.1.7 (Closes: #1026134).
+    * Refresh patches.
+  * Remove change-Sphinx-theme.patch - use default furo, packaged in Debian.
+  * Replace "dh --with" in debian/rules calls with
+    dependencies on dh-sequence-*.
+  * Add dependency on pybuild-plugin-pyproject, for PEP-517,
+    as pointed by lintian.
+  * Add debian/gbp.conf file with settings used by Python team.
+  * Add Python team to Uploaders.
+
+  [ Debian Janitor ]
+  * Remove constraints unnecessary since buster:
+    + Build-Depends-Indep: Drop versioned constraint on python3-sphinx.
+  * Replace spaces in short license names with dashes.
+  * Update standards version to 4.6.2, no changes needed.
+
+ -- Tomasz Rybak <serpent@debian.org>  Wed, 28 Dec 2022 21:34:23 +0100
+
+psycopg3 (3.1.3-0.1) unstable; urgency=medium
+
+  * Non-maintainer source-only upload (Closes: #1014833).
+  * Updating to current upstream as needed by pgcli (Closes: #1021249):
+    - rediffing change-Sphinx-theme.patch.
+    - rediffing use-local-documentation.patch.
+    - adding newly required python3-typing-extensions to build-depends.
+
+ -- Daniel Baumann <daniel.baumann@progress-linux.org>  Wed, 05 Oct 2022 10:48:22 +0200
+
+psycopg3 (3.0.1-1) unstable; urgency=medium
+
+  * Initial release (Closes: #995447).
+
+ -- Tomasz Rybak <serpent@debian.org>  Tue, 19 Apr 2022 20:24:23 +0200

@@ -1,0 +1,88 @@
+#!/usr/bin/make -f
+
+# Allow for silencing build process
+ifeq (,$(filter terse,$(DEB_BUILD_OPTIONS)))
+export DH_VERBOSE = 1
+export PYBUILD_VERBOSE=1
+else
+export DH_QUIET = 1
+endif
+
+# Enable all hardening options
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+export DEB_CFLAGS_MAINT_APPEND = -Wall -pedantic
+DPKG_EXPORT_BUILDFLAGS = 1
+
+# Needed for extracting build-related metadata
+include /usr/share/dpkg/buildflags.mk
+include /usr/share/dpkg/pkg-info.mk
+include /usr/share/dpkg/architecture.mk
+
+# Don't perform optimisation when we want to have all binary symbols
+ifneq (,$(filter nostrip,$(DEB_BUILD_OPTIONS)))
+DEB_CXXFLAGS_MAINT_STRIP=-O2
+DEB_CXXFLAGS_MAINT_APPEND=-O0
+endif
+
+# Rename package to avoid potential conflict with psycopg2
+export PYBUILD_NAME = psycopg
+# And don't even try to built for Python 2: Python 3.6 is required
+export PYBUILD_DISABLE_python2 = 1
+
+# Reproducible builds - build date is taken from debian/changelog
+BUILD_DATE=$(shell LC_ALL=C date -u "+%B %d, %Y" -d "@$(SOURCE_DATE_EPOCH)")
+SPHINXOPTS:=-D today=\"$(BUILD_DATE)\"
+SPHINXOPTS+=-D html_last_updated_fmt=\"$(BUILD_DATE)\"
+
+%:
+	dh $@ --buildsystem=pybuild
+
+# We need to build 3 different modules, from 3 different directories
+override_dh_auto_clean:
+	PYBUILD_DIR=psycopg dh_auto_clean -- --name psycopg
+	PYBUILD_DIR=psycopg_pool dh_auto_clean -- --name psycopg_pool
+# Not buildable yet - requires Cython newer than currently in Debian
+#	PYBUILD_DIR=psycopg_c dh_auto_clean -- --name psycopg_c
+
+override_dh_auto_configure:
+	PYBUILD_DIR=psycopg dh_auto_configure -- --name psycopg
+	PYBUILD_DIR=psycopg_pool dh_auto_configure -- --name psycopg_pool
+# Not buildable yet - requires Cython newer than currently in Debian
+#	PYBUILD_DIR=psycopg_c dh_auto_configure -- --name psycopg_c
+
+override_dh_auto_build:
+	PYBUILD_DIR=psycopg dh_auto_build -- --name psycopg
+	PYBUILD_DIR=psycopg_pool dh_auto_build -- --name psycopg_pool
+# Not buildable yet - requires Cython newer than currently in Debian
+#	PYBUILD_DIR=psycopg_c dh_auto_build -- --name psycopg_c
+
+override_dh_auto_install:
+	PYBUILD_DIR=psycopg dh_auto_install -- --name psycopg
+	PYBUILD_DIR=psycopg_pool dh_auto_install -- --name psycopg_pool
+# Not buildable yet - requires Cython newer than currently in Debian
+#	PYBUILD_DIR=psycopg_c dh_auto_install -- --name psycopg_c
+
+override_dh_installdocs:
+# Don't build documentation when required not to do it
+ifeq (,$(filter nodoc,$(DEB_BUILD_OPTIONS)))
+# Documentation requires psycopg module to analyse existing types
+	SPHINXOPTS="$(SPHINXOPTS)" pybuild --build -i python3 -s custom --build-args 'make -C {dir}/docs html'
+	dh_installdocs
+endif
+
+override_dh_auto_test-arch:
+# Don't run tests when required not to do it
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+ifneq ($(DEB_HOST_ARCH),hurd-i386)
+	LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+	PSYCOPG_TEST_DSN="host=localhost dbname=postgres" \
+	PSYCOPG_IMPL=python \
+	pg_virtualenv pytest-3 -m "not slow"
+#	LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+	PSYCOPG_TEST_DSN="host=localhost dbname=postgres" \
+	PSYCOPG_IMPL=c \
+	pg_virtualenv pytest-3 -m "not slow"
+endif
+endif
+
+override_dh_auto_test-indep:

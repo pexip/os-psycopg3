@@ -1,0 +1,19 @@
+Description: Disable linking to PostgreSQL libpq documentation
+ Commented-out Sphinx module fetches PostgreSQL source SGML file.
+ I don't know yet how to fix it, so disabling for now; it could
+ be enabled again if we had a doc/src/sgml/libpq.sgml available.
+Forwarded: not-needed
+Author: Tomasz Rybak <serpent@debian.org>
+Last-Update: 2022-12-28
+Index: psycopg3/docs/conf.py
+===================================================================
+--- psycopg3.orig/docs/conf.py
++++ psycopg3/docs/conf.py
+@@ -43,7 +43,6 @@ extensions = [
+     "sql_role",
+     "ticket_role",
+     "pg3_docs",
+-    "libpq_docs",
+ ]
+ 
+ # Add any paths that contain templates here, relative to this directory.
