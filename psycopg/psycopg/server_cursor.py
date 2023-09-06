@@ -188,7 +188,6 @@ class ServerCursorMixin(BaseCursor[ConnectionType, Row]):
         yield from self._conn._exec_command(query)
 
     def _make_declare_statement(self, query: Query) -> sql.Composed:
-
         if isinstance(query, bytes):
             query = query.decode(self._encoding)
         if not isinstance(query, sql.Composable):
@@ -291,7 +290,7 @@ class ServerCursor(ServerCursorMixin["Connection[Any]", Row], Cursor[Row]):
         try:
             with self._conn.lock:
                 self._conn.wait(self._declare_gen(query, params, binary))
-        except e.Error as ex:
+        except e._NO_TRACEBACK as ex:
             raise ex.with_traceback(None)
 
         return self
@@ -427,7 +426,7 @@ class AsyncServerCursor(
         try:
             async with self._conn.lock:
                 await self._conn.wait(self._declare_gen(query, params, binary))
-        except e.Error as ex:
+        except e._NO_TRACEBACK as ex:
             raise ex.with_traceback(None)
 
         return self

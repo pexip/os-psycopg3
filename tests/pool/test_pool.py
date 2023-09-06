@@ -812,7 +812,6 @@ def test_grow(dsn, monkeypatch, min_size, want_times):
 @pytest.mark.slow
 @pytest.mark.timing
 def test_shrink(dsn, monkeypatch):
-
     from psycopg_pool.pool import ShrinkPool
 
     results: List[Tuple[int, int]] = []
@@ -845,6 +844,7 @@ def test_shrink(dsn, monkeypatch):
 
 
 @pytest.mark.slow
+@pytest.mark.timing
 def test_reconnect(proxy, caplog, monkeypatch):
     caplog.set_level(logging.WARNING, logger="psycopg.pool")
 
@@ -1094,6 +1094,19 @@ def test_check_idle(dsn):
         p.check()
         with p.connection() as conn:
             assert conn.info.transaction_status == TransactionStatus.IDLE
+
+
+@pytest.mark.slow
+def test_check_max_lifetime(dsn):
+    with pool.ConnectionPool(dsn, min_size=1, max_lifetime=0.2) as p:
+        with p.connection() as conn:
+            pid = conn.info.backend_pid
+        with p.connection() as conn:
+            assert conn.info.backend_pid == pid
+        sleep(0.3)
+        p.check()
+        with p.connection() as conn:
+            assert conn.info.backend_pid != pid
 
 
 @pytest.mark.slow

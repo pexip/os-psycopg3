@@ -90,7 +90,7 @@ class AsyncCursor(BaseCursor["AsyncConnection[Any]", Row]):
                 await self._conn.wait(
                     self._execute_gen(query, params, prepare=prepare, binary=binary)
                 )
-        except e.Error as ex:
+        except e._NO_TRACEBACK as ex:
             raise ex.with_traceback(None)
         return self
 
@@ -121,7 +121,7 @@ class AsyncCursor(BaseCursor["AsyncConnection[Any]", Row]):
                 await self._conn.wait(
                     self._executemany_gen_no_pipeline(query, params_seq, returning)
                 )
-        except e.Error as ex:
+        except e._NO_TRACEBACK as ex:
             raise ex.with_traceback(None)
 
     async def stream(
@@ -135,7 +135,6 @@ class AsyncCursor(BaseCursor["AsyncConnection[Any]", Row]):
             raise e.ProgrammingError("stream() cannot be used in pipeline mode")
 
         async with self._conn.lock:
-
             try:
                 await self._conn.wait(
                     self._stream_send_gen(query, params, binary=binary)
@@ -147,7 +146,7 @@ class AsyncCursor(BaseCursor["AsyncConnection[Any]", Row]):
                     yield rec
                     first = False
 
-            except e.Error as ex:
+            except e._NO_TRACEBACK as ex:
                 raise ex.with_traceback(None)
 
             finally:
@@ -173,10 +172,10 @@ class AsyncCursor(BaseCursor["AsyncConnection[Any]", Row]):
     async def fetchone(self) -> Optional[Row]:
         await self._fetch_pipeline()
         self._check_result_for_fetch()
-        rv = self._tx.load_row(self._pos, self._make_row)
-        if rv is not None:
+        record = self._tx.load_row(self._pos, self._make_row)
+        if record is not None:
             self._pos += 1
-        return rv
+        return record
 
     async def fetchmany(self, size: int = 0) -> List[Row]:
         await self._fetch_pipeline()
@@ -235,7 +234,7 @@ class AsyncCursor(BaseCursor["AsyncConnection[Any]", Row]):
 
             async with AsyncCopy(self, writer=writer) as copy:
                 yield copy
-        except e.Error as ex:
+        except e._NO_TRACEBACK as ex:
             raise ex.with_traceback(None)
 
         self._select_current_result(0)

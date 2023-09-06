@@ -5,6 +5,7 @@ PostgreSQL database adapter for Python - pure Python package
 
 # Copyright (C) 2020 The Psycopg Team
 
+import re
 import os
 from setuptools import setup
 
@@ -14,20 +15,21 @@ here = os.path.abspath(os.path.dirname(__file__))
 if os.path.abspath(os.getcwd()) != here:
     os.chdir(here)
 
-# Only for release 3.1.7. Not building binary packages because Scaleway
-# has no runner available, but psycopg-binary 3.1.6 should work as well
-# as the only change is in rows.py.
-version = "3.1.7"
-ext_versions = ">= 3.1.6, <= 3.1.7"
+with open("psycopg/version.py") as f:
+    data = f.read()
+    m = re.search(r"""(?m)^__version__\s*=\s*['"]([^'"]+)['"]""", data)
+    if not m:
+        raise Exception(f"cannot find version in {f.name}")
+    version = m.group(1)
 
 extras_require = {
     # Install the C extension module (requires dev tools)
     "c": [
-        f"psycopg-c {ext_versions}",
+        f"psycopg-c == {version}",
     ],
     # Install the stand-alone C extension module
     "binary": [
-        f"psycopg-binary {ext_versions}",
+        f"psycopg-binary == {version}",
     ],
     # Install the connection pool
     "pool": [
@@ -35,19 +37,19 @@ extras_require = {
     ],
     # Requirements to run the test suite
     "test": [
-        "mypy >= 0.990",
+        "anyio >= 3.6.2",
+        "mypy >= 1.4.1",
         "pproxy >= 2.7",
         "pytest >= 6.2.5",
-        "pytest-asyncio >= 0.17",
         "pytest-cov >= 3.0",
-        "pytest-randomly >= 3.10",
+        "pytest-randomly >= 3.5",
     ],
     # Requirements needed for development
     "dev": [
-        "black >= 22.3.0",
+        "black >= 23.1.0",
         "dnspython >= 2.1",
         "flake8 >= 4.0",
-        "mypy >= 0.990",
+        "mypy >= 1.4.1",
         "types-setuptools >= 57.4",
         "wheel >= 0.37",
     ],

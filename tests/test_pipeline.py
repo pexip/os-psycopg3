@@ -51,7 +51,7 @@ def test_pipeline_reenter(conn: psycopg.Connection[Any]) -> None:
         assert p2 is p1
         assert p2.status == pq.PipelineStatus.ON
     assert conn._pipeline is None
-    assert p1.status == pq.PipelineStatus.OFF
+    assert p1.status == pq.PipelineStatus.OFF  # type: ignore[comparison-overlap]
 
 
 def test_pipeline_broken_conn_exit(conn: psycopg.Connection[Any]) -> None:
@@ -211,6 +211,7 @@ def test_sync_syncs_results(conn):
         assert cur.statusmessage == "SELECT 1"
 
 
+@pytest.mark.flakey("assert rarely fails randomly in CI blocking release")
 def test_sync_syncs_errors(conn):
     conn.autocommit = True
     with conn.pipeline() as p:
@@ -326,9 +327,10 @@ def test_executemany(conn):
             [(10,), (20,)],
             returning=True,
         )
-        assert cur.rowcount == 2
+        assert cur.rowcount == 1
         assert cur.fetchone() == (10,)
         assert cur.nextset()
+        assert cur.rowcount == 1
         assert cur.fetchone() == (20,)
         assert cur.nextset() is None
 
@@ -423,6 +425,22 @@ def test_auto_prepare(conn):
 
     res = [c.fetchone()[0] for c in cursors]
     assert res == [0] * 5 + [1] * 5
+
+
+def test_prepare_error(conn):
+    """Regression test for GH issue #585.
+
+    An invalid prepared statement, in a pipeline, should be discarded at exit
+    and not reused.
+    """
+    conn.autocommit = True
+    stmt = "INSERT INTO nosuchtable(data) VALUES (%s)"
+    with pytest.raises(psycopg.errors.UndefinedTable):
+        with conn.pipeline():
+            conn.execute(stmt, ["foo"], prepare=True)
+    assert not conn._prepared._names
+    with pytest.raises(psycopg.errors.UndefinedTable):
+        conn.execute(stmt, ["bar"])
 
 
 def test_transaction(conn):
@@ -575,3 +593,23 @@ def test_concurrency(conn):
     assert s == sum(values)
     (after,) = conn.execute("select value from accessed").fetchone()
     assert after > before
+
+
+def test_execute_nextset_warning(conn):
+    cur = conn.cursor()
+    cur.execute("select 1")
+    cur.execute("select 2")
+
+    assert cur.fetchall() == [(2,)]
+    assert not cur.nextset()
+    assert cur.fetchall() == []
+
+    with conn.pipeline():
+        cur.execute("select 1")
+        cur.execute("select 2")
+
+        # WARNING: this behavior is unintentional and will be changed in 3.2
+        assert cur.fetchall() == [(1,)]
+        with pytest.warns(DeprecationWarning, match="nextset"):
+            assert cur.nextset()
+        assert cur.fetchall() == [(2,)]

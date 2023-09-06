@@ -6,24 +6,103 @@ Source: https://www.psycopg.org/psycopg3/
  https://github.com/psycopg/psycopg
 
 Files: *
-Copyright: 2020-2021 Daniele Varrazzo <daniele.varrazzo@gmail.com>
- 2020-2021 The Psycopg Team
+Copyright: 2020-2023 Daniele Varrazzo <daniele.varrazzo@gmail.com>
+ 2020-2023 The Psycopg Team
 License: LGPL-3
- GNU LESSER GENERAL PUBLIC LICENSE
- Version 3, 29 June 2007
- .
- Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
- Everyone is permitted to copy and distribute verbatim copies
- of this license document, but changing it is not allowed.
- .
- On Debian systems, the full text of the GNU Lesser General Public
- License version 3 can be found in the file
- `/usr/share/common-licenses/LGPL-3'.
 
 Files: psycopg_c/psycopg_c/types/numutils.c
 Copyright: 2020-2021 The Psycopg Team
  Portions Copyright 1996-2020, PostgreSQL Global Development Group
  Portions Copyright 1994, Regents of the University of California
+License: PostgreSQL
+
+Files: psycopg_c/psycopg_c/_psycopg/endian.pxd
+Copyright: 2020-2021 The Psycopg Team
+ Mathias Panzenböck, from https://gist.github.com/panzi/6856583
+License: Public-Domain-Panzenböck or BSD-2-clause or MIT or Apache-2.0
+
+Files: tests/dbapi20.py
+Copyright: 2009 Stuart Bishop <stuart@stuartbishop.net>
+License: Public-Domain
+
+Files: debian/*
+Copyright: 2022 Tomasz Rybak <serpent@debian.org>
+License: GPL-3
+
+License: Apache-2.0
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+     http://www.apache.org/licenses/LICENSE-2.0
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS"BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+ .
+ On Debian systems, the complete text of the Apache License,
+ Version 2.0 can be found in '/usr/share/common-licenses/Apache-2.0'.
+
+License: BSD-2-clause
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions
+ are met: 
+ 1. Redistributions of source code must retain the above copyright
+    notice(s), this list of conditions and the following disclaimer as
+    the first lines of this file unmodified other than the possible
+    addition of one or more copyright notices.
+ 2. Redistributions in binary form must reproduce the above copyright
+    notice(s), this list of conditions and the following disclaimer in
+    the documentation and/or other materials provided with the
+    distribution.
+ .
+ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDER(S) ``AS IS'' AND ANY
+ EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+ PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT HOLDER(S) BE
+ LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
+ BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+ WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
+ OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
+ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+License: GPL-3
+ GNU GENERAL PUBLIC LICENSE
+ Version 3, 29 June 2007
+ .
+ Copyright (C) 2007 Free Software Foundation, Inc. <http://fsf.org/>
+ Everyone is permitted to copy and distribute verbatim copies
+ of this license document, but changing it is not allowed.
+ .
+ On Debian systems, the full text of the GNU General Public License
+ version 3 can be found in the file `/usr/share/common-licenses/GPL-3'.
+
+License: LGPL-3
+ On Debian systems, the full text of the GNU Lesser General Public
+ License version 3 can be found in the file
+ `/usr/share/common-licenses/LGPL-3'.
+
+License: MIT
+ Permission is hereby granted, free of charge, to any person obtaining a copy
+ of this software and associated documentation files (the "Software"), to deal
+ in the Software without restriction, including without limitation the rights
+ to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ copies of the Software, and to permit persons to whom the Software is
+ furnished to do so, subject to the following conditions:
+ .
+ The above copyright notice and this permission notice shall be included in all
+ copies or substantial portions of the Software.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ SOFTWARE.
+
 License: PostgreSQL
  Permission to use, copy, modify, and distribute this software and its
  documentation for any purpose, without fee, and without a written agreement
@@ -42,10 +121,11 @@ License: PostgreSQL
  ON AN "AS IS" BASIS, AND THE UNIVERSITY OF CALIFORNIA HAS NO OBLIGATIONS TO
  PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
 
-Files: psycopg_c/psycopg_c/_psycopg/endian.pxd
-Copyright: 2020-2021 The Psycopg Team
- Mathias Panzenböck, from https://gist.github.com/panzi/6856583
-License: Public Domain, BSD, MIT, Apache
+License: Public-Domain
+ This software is Public Domain and may be used without restrictions.
+
+License: Public-Domain-Panzenböck
+ This software is Public Domain and may be used without restrictions.
  I, Mathias Panzenböck, place this file hereby into the public domain.
  Use it at your own risk for whatever you like.  In case there are
  jurisdictions that don't support putting things in the public domain
@@ -53,21 +133,3 @@ License: Public Domain, BSD, MIT, Apache
  Apache licenses, if you want to. This code is trivial anyway. Consider
  it an example on how to get the endian conversion functions on
  different platforms.
-
-Files: tests/dbapi20.py
-Copyright: 2009 Stuart Bishop <stuart@stuartbishop.net>
-License: Public-Domain
- This software is Public Domain and may be used without restrictions.
-
-Files: debian/*
-Copyright: 2022 Tomasz Rybak <serpent@debian.org>
-License: GPL-3
- GNU GENERAL PUBLIC LICENSE
- Version 3, 29 June 2007
- .
- Copyright (C) 2007 Free Software Foundation, Inc. <http://fsf.org/>
- Everyone is permitted to copy and distribute verbatim copies
- of this license document, but changing it is not allowed.
- .
- On Debian systems, the full text of the GNU General Public License
- version 3 can be found in the file `/usr/share/common-licenses/GPL-3'.

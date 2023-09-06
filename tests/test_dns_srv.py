@@ -52,14 +52,12 @@ def test_srv(conninfo, want, env, fake_srv, setpgenv):
     assert conninfo_to_dict(want) == params
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 @pytest.mark.parametrize("conninfo, want, env", samples_ok)
 async def test_srv_async(conninfo, want, env, afake_srv, setpgenv):
     setpgenv(env)
     params = conninfo_to_dict(conninfo)
-    params = await (
-        psycopg._dns.resolve_srv_async(params)  # type: ignore[attr-defined]
-    )
+    params = await psycopg._dns.resolve_srv_async(params)  # type: ignore[attr-defined]
     assert conninfo_to_dict(want) == params
 
 
@@ -77,7 +75,7 @@ def test_srv_bad(conninfo, env, fake_srv, setpgenv):
         psycopg._dns.resolve_srv(params)  # type: ignore[attr-defined]
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 @pytest.mark.parametrize("conninfo,  env", samples_bad)
 async def test_srv_bad_async(conninfo, env, afake_srv, setpgenv):
     setpgenv(env)

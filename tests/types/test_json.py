@@ -47,6 +47,35 @@ def test_dump(conn, val, wrapper, fmt_in):
     assert cur.fetchone()[0] is True
 
 
+@pytest.mark.parametrize(
+    "fmt_in, pgtype, dumper_name",
+    [
+        ("t", "json", "JsonDumper"),
+        ("b", "json", "JsonBinaryDumper"),
+        ("t", "jsonb", "JsonbDumper"),
+        ("b", "jsonb", "JsonbBinaryDumper"),
+    ],
+)
+def test_dump_dict(conn, fmt_in, pgtype, dumper_name):
+    obj = {"foo": "bar"}
+    cur = conn.cursor()
+    dumper = getattr(psycopg.types.json, dumper_name)
+
+    # Skip json on CRDB as the oid doesn't exist.
+    try:
+        conn.adapters.types[dumper.oid]
+    except KeyError:
+        pytest.skip(
+            f"{type(conn).__name__} doesn't have the oid {dumper.oid}"
+            f" used by {dumper.__name__}"
+        )
+
+    cur.adapters.register_dumper(dict, dumper)
+    cur.execute(f"select %{fmt_in}", (obj,))
+    assert cur.fetchone()[0] == obj
+    assert cur.description[0].type_code == conn.adapters.types[pgtype].oid
+
+
 @pytest.mark.crdb_skip("json array")
 @pytest.mark.parametrize("val", samples)
 @pytest.mark.parametrize("wrapper", ["Json", "Jsonb"])
@@ -105,6 +134,21 @@ def test_dump_customise(conn, wrapper, fmt_in):
     cur = conn.cursor()
 
     set_json_dumps(my_dumps)
+    try:
+        cur.execute(f"select %{fmt_in.value}->>'baz' = 'qux'", (wrapper(obj),))
+        assert cur.fetchone()[0] is True
+    finally:
+        set_json_dumps(json.dumps)
+
+
+@pytest.mark.parametrize("fmt_in", PyFormat)
+@pytest.mark.parametrize("wrapper", ["Json", "Jsonb"])
+def test_dump_customise_bytes(conn, wrapper, fmt_in):
+    wrapper = getattr(psycopg.types.json, wrapper)
+    obj = {"foo": "bar"}
+    cur = conn.cursor()
+
+    set_json_dumps(my_dumps_bytes)
     try:
         cur.execute(f"select %{fmt_in.value}->>'baz' = 'qux'", (wrapper(obj),))
         assert cur.fetchone()[0] is True
@@ -174,6 +218,12 @@ def my_dumps(obj):
     obj = deepcopy(obj)
     obj["baz"] = "qux"
     return json.dumps(obj)
+
+
+def my_dumps_bytes(obj):
+    obj = deepcopy(obj)
+    obj["baz"] = "qux"
+    return json.dumps(obj).encode()
 
 
 def my_loads(data):

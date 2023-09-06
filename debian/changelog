@@ -1,3 +1,14 @@
+psycopg3 (3.1.10-1) unstable; urgency=medium
+
+  * Team upload
+  * [b280f01] d/watch: Reorder options to one option per line
+  * [3eda65d] New upstream version 3.1.10
+  * [9ce62b4] d/copyright: Update content and year data
+  * [acbf568] d/rules: Extend override_dh_clean
+    (Closes: #1049246)
+
+ -- Carsten Schoenert <c.schoenert@t-online.de>  Wed, 06 Sep 2023 13:28:49 +0530
+
 psycopg3 (3.1.7-4) unstable; urgency=medium
 
   * Add *.pydist files to deal with dh_python psycopg names overrides.

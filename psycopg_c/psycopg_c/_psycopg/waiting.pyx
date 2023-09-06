@@ -5,6 +5,10 @@ C implementation of waiting functions
 # Copyright (C) 2022 The Psycopg Team
 
 from cpython.object cimport PyObject_CallFunctionObjArgs
+from typing import TypeVar
+
+RV = TypeVar("RV")
+
 
 cdef extern from *:
     """
@@ -72,11 +76,8 @@ wait_c_impl(int fileno, int wait, float timeout)
     select_rv = poll(&input_fd, 1, timeout_ms);
     Py_END_ALLOW_THREADS
 
+    if (select_rv < 0) { goto error; }
     if (PyErr_CheckSignals()) { goto finally; }
-
-    if (select_rv < 0) {
-        goto error;
-    }
 
     if (input_fd.events & POLLIN) { rv |= SELECT_EV_READ; }
     if (input_fd.events & POLLOUT) { rv |= SELECT_EV_WRITE; }
@@ -120,11 +121,8 @@ wait_c_impl(int fileno, int wait, float timeout)
     select_rv = select(fileno + 1, &ifds, &ofds, &efds, tvptr);
     Py_END_ALLOW_THREADS
 
+    if (select_rv < 0) { goto error; }
     if (PyErr_CheckSignals()) { goto finally; }
-
-    if (select_rv < 0) {
-        goto error;
-    }
 
     if (FD_ISSET(fileno, &ifds)) { rv |= SELECT_EV_READ; }
     if (FD_ISSET(fileno, &ofds)) { rv |= SELECT_EV_WRITE; }
@@ -168,7 +166,7 @@ def wait_c(gen: PQGen[RV], int fileno, timeout = None) -> RV:
     if timeout is None:
         ctimeout = -1.0
     else:
-        ctimeout = float(timeout)
+        ctimeout = <float>float(timeout)
         if ctimeout < 0.0:
             ctimeout = -1.0
 

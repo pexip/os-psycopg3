@@ -13,7 +13,6 @@ from psycopg import errors as e
 from .test_pipeline import pipeline_aborted
 
 pytestmark = [
-    pytest.mark.asyncio,
     pytest.mark.pipeline,
     pytest.mark.skipif("not psycopg.AsyncPipeline.is_supported()"),
 ]
@@ -52,7 +51,7 @@ async def test_pipeline_reenter(aconn: psycopg.AsyncConnection[Any]) -> None:
         assert p2 is p1
         assert p2.status == pq.PipelineStatus.ON
     assert aconn._pipeline is None
-    assert p1.status == pq.PipelineStatus.OFF
+    assert p1.status == pq.PipelineStatus.OFF  # type: ignore[comparison-overlap]
 
 
 async def test_pipeline_broken_conn_exit(aconn: psycopg.AsyncConnection[Any]) -> None:
@@ -212,6 +211,7 @@ async def test_sync_syncs_results(aconn):
         assert cur.statusmessage == "SELECT 1"
 
 
+@pytest.mark.flakey("assert rarely fails randomly in CI blocking release")
 async def test_sync_syncs_errors(aconn):
     await aconn.set_autocommit(True)
     async with aconn.pipeline() as p:
@@ -327,9 +327,10 @@ async def test_executemany(aconn):
             [(10,), (20,)],
             returning=True,
         )
-        assert cur.rowcount == 2
+        assert cur.rowcount == 1
         assert (await cur.fetchone()) == (10,)
         assert cur.nextset()
+        assert cur.rowcount == 1
         assert (await cur.fetchone()) == (20,)
         assert cur.nextset() is None
 
@@ -425,6 +426,22 @@ async def test_auto_prepare(aconn):
 
     res = [(await c.fetchone())[0] for c in cursors]
     assert res == [0] * 5 + [1] * 5
+
+
+async def test_prepare_error(aconn):
+    """Regression test for GH issue #585.
+
+    An invalid prepared statement, in a pipeline, should be discarded at exit
+    and not reused.
+    """
+    await aconn.set_autocommit(True)
+    stmt = "INSERT INTO nosuchtable(data) VALUES (%s)"
+    with pytest.raises(psycopg.errors.UndefinedTable):
+        async with aconn.pipeline():
+            await aconn.execute(stmt, ["foo"], prepare=True)
+    assert not aconn._prepared._names
+    with pytest.raises(psycopg.errors.UndefinedTable):
+        await aconn.execute(stmt, ["bar"])
 
 
 async def test_transaction(aconn):
@@ -584,3 +601,23 @@ async def test_concurrency(aconn):
     assert s == sum(values)
     (after,) = await (await aconn.execute("select value from accessed")).fetchone()
     assert after > before
+
+
+async def test_execute_nextset_warning(aconn):
+    cur = aconn.cursor()
+    await cur.execute("select 1")
+    await cur.execute("select 2")
+
+    assert (await cur.fetchall()) == [(2,)]
+    assert not cur.nextset()
+    assert (await cur.fetchall()) == []
+
+    async with aconn.pipeline():
+        await cur.execute("select 1")
+        await cur.execute("select 2")
+
+        # WARNING: this behavior is unintentional and will be changed in 3.2
+        assert (await cur.fetchall()) == [(1,)]
+        with pytest.warns(DeprecationWarning, match="nextset"):
+            assert cur.nextset()
+        assert (await cur.fetchall()) == [(2,)]
