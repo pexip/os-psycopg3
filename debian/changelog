@@ -1,3 +1,9 @@
+psycopg3 (3.1.7-4+pexip24u1) pexip; urgency=medium
+
+  * Prepare Pexip packaging
+
+ -- John-Mark Bell <jmb@pexip.com>  Wed, 04 Dec 2024 15:58:17 +0000
+
 psycopg3 (3.1.7-4) unstable; urgency=medium
 
   * Add *.pydist files to deal with dh_python psycopg names overrides.
