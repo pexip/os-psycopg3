@@ -36,7 +36,17 @@ class ConnectionPool(BasePool[Connection[Any]]):
         connection_class: Type[Connection[Any]] = Connection,
         configure: Optional[Callable[[Connection[Any]], None]] = None,
         reset: Optional[Callable[[Connection[Any]], None]] = None,
-        **kwargs: Any,
+        kwargs: Optional[Dict[str, Any]] = None,
+        min_size: int = 4,
+        max_size: Optional[int] = None,
+        name: Optional[str] = None,
+        timeout: float = 30.0,
+        max_waiting: int = 0,
+        max_lifetime: float = 60 * 60.0,
+        max_idle: float = 10 * 60.0,
+        reconnect_timeout: float = 5 * 60.0,
+        reconnect_failed: Optional[Callable[[BasePool[Connection[Any]]], None]] = None,
+        num_workers: int = 3,
     ):
         self.connection_class = connection_class
         self._configure = configure
@@ -53,7 +63,21 @@ class ConnectionPool(BasePool[Connection[Any]]):
         self._tasks: "Queue[MaintenanceTask]" = Queue()
         self._workers: List[threading.Thread] = []
 
-        super().__init__(conninfo, **kwargs)
+        super().__init__(
+            conninfo,
+            kwargs=kwargs,
+            min_size=min_size,
+            max_size=max_size,
+            open=open,
+            name=name,
+            timeout=timeout,
+            max_waiting=max_waiting,
+            max_lifetime=max_lifetime,
+            max_idle=max_idle,
+            reconnect_timeout=reconnect_timeout,
+            reconnect_failed=reconnect_failed,
+            num_workers=num_workers,
+        )
 
         if open:
             self.open()
@@ -327,7 +351,6 @@ class ConnectionPool(BasePool[Connection[Any]]):
         connections: Sequence[Connection[Any]] = (),
         timeout: float = 0.0,
     ) -> None:
-
         # Stop the scheduler
         self._sched.enter(0, None)
 
@@ -409,6 +432,15 @@ class ConnectionPool(BasePool[Connection[Any]]):
 
         while conns:
             conn = conns.pop()
+
+            # Check for expired connections
+            if conn._expire_at <= monotonic():
+                logger.info("discarding expired connection %s", conn)
+                conn.close()
+                self.run_task(AddConnection(self))
+                continue
+
+            # Check for broken connections
             try:
                 conn.execute("SELECT 1")
                 if conn.pgconn.transaction_status == TransactionStatus.INTRANS:
@@ -691,7 +723,7 @@ class WaitingClient:
 
     def __init__(self) -> None:
         self.conn: Optional[Connection[Any]] = None
-        self.error: Optional[Exception] = None
+        self.error: Optional[BaseException] = None
 
         # The WaitingClient behaves in a way similar to an Event, but we need
         # to notify reliably the flagger that the waiter has "accepted" the
@@ -707,10 +739,13 @@ class WaitingClient:
         """
         with self._cond:
             if not (self.conn or self.error):
-                if not self._cond.wait(timeout):
-                    self.error = PoolTimeout(
-                        f"couldn't get a connection after {timeout} sec"
-                    )
+                try:
+                    if not self._cond.wait(timeout):
+                        self.error = PoolTimeout(
+                            f"couldn't get a connection after {timeout} sec"
+                        )
+                except BaseException as ex:
+                    self.error = ex
 
         if self.conn:
             return self.conn

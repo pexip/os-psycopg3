@@ -5,7 +5,6 @@ from psycopg import rows, errors as e
 from psycopg.pq import Format
 
 pytestmark = [
-    pytest.mark.asyncio,
     pytest.mark.crdb_skip("server-side cursor"),
 ]
 
@@ -20,7 +19,7 @@ async def test_init_row_factory(aconn):
 
     async with psycopg.AsyncServerCursor(aconn, "bar") as cur:
         assert cur.name == "bar"
-        assert cur.row_factory is rows.dict_row  # type: ignore
+        assert cur.row_factory is rows.dict_row
 
     async with psycopg.AsyncServerCursor(
         aconn, "baz", row_factory=rows.namedtuple_row

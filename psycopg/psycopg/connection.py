@@ -29,6 +29,7 @@ from .adapt import AdaptersMap
 from ._enums import IsolationLevel
 from .cursor import Cursor
 from ._compat import LiteralString
+from .pq.misc import connection_summary
 from .conninfo import make_conninfo, conninfo_to_dict, ConnectionInfo
 from ._pipeline import BasePipeline, Pipeline
 from .generators import notifies, connect, execute
@@ -161,7 +162,7 @@ class BaseConnection(Generic[Row]):
 
     def __repr__(self) -> str:
         cls = f"{self.__class__.__module__}.{self.__class__.__qualname__}"
-        info = pq.misc.connection_summary(self.pgconn)
+        info = connection_summary(self.pgconn)
         return f"<{cls} {info} at 0x{id(self):x}>"
 
     @property
@@ -230,7 +231,7 @@ class BaseConnection(Generic[Row]):
 
     def _set_read_only_gen(self, value: Optional[bool]) -> PQGen[None]:
         yield from self._check_intrans_gen("read_only")
-        self._read_only = bool(value)
+        self._read_only = bool(value) if value is not None else None
         self._begin_statement = b""
 
     @property
@@ -249,7 +250,7 @@ class BaseConnection(Generic[Row]):
 
     def _set_deferrable_gen(self, value: Optional[bool]) -> PQGen[None]:
         yield from self._check_intrans_gen("deferrable")
-        self._deferrable = bool(value)
+        self._deferrable = bool(value) if value is not None else None
         self._begin_statement = b""
 
     def _check_intrans_gen(self, attribute: str) -> PQGen[None]:
@@ -724,7 +725,7 @@ class Connection(BaseConnection[Row]):
                 cls._connect_gen(conninfo, autocommit=autocommit),
                 timeout=params["connect_timeout"],
             )
-        except e.Error as ex:
+        except e._NO_TRACEBACK as ex:
             raise ex.with_traceback(None)
 
         if row_factory:
@@ -875,7 +876,7 @@ class Connection(BaseConnection[Row]):
 
             return cur.execute(query, params, prepare=prepare)
 
-        except e.Error as ex:
+        except e._NO_TRACEBACK as ex:
             raise ex.with_traceback(None)
 
     def commit(self) -> None:
@@ -919,7 +920,7 @@ class Connection(BaseConnection[Row]):
             with self.lock:
                 try:
                     ns = self.wait(notifies(self.pgconn))
-                except e.Error as ex:
+                except e._NO_TRACEBACK as ex:
                     raise ex.with_traceback(None)
             enc = pgconn_encoding(self.pgconn)
             for pgn in ns:

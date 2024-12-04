@@ -197,9 +197,15 @@ class AdaptersMap:
             use the last one of the dumpers registered on `!cls`.
         """
         try:
-            dmap = self._dumpers[format]
+            # Fast path: the class has a known dumper.
+            return self._dumpers[format][cls]
         except KeyError:
-            raise ValueError(f"bad dumper format: {format}")
+            if format not in self._dumpers:
+                raise ValueError(f"bad dumper format: {format}")
+
+            # If the KeyError was caused by cls missing from dmap, let's
+            # look for different cases.
+            dmap = self._dumpers[format]
 
         # Look for the right class, including looking at superclasses
         for scls in cls.__mro__:
@@ -213,9 +219,10 @@ class AdaptersMap:
                 d = dmap[scls] = dmap.pop(fqn)
                 return d
 
+        format = PyFormat(format)
         raise e.ProgrammingError(
-            f"cannot adapt type {cls.__name__!r} using placeholder '%{format}'"
-            f" (format: {PyFormat(format).name})"
+            f"cannot adapt type {cls.__name__!r} using placeholder '%{format.value}'"
+            f" (format: {format.name})"
         )
 
     def get_dumper_by_oid(self, oid: int, format: pq.Format) -> Type["Dumper"]:

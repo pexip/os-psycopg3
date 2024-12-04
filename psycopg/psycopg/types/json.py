@@ -14,7 +14,7 @@ from ..pq import Format
 from ..adapt import Buffer, Dumper, Loader, PyFormat, AdaptersMap
 from ..errors import DataError
 
-JsonDumpsFunction = Callable[[Any], str]
+JsonDumpsFunction = Callable[[Any], Union[str, bytes]]
 JsonLoadsFunction = Callable[[Union[str, bytes]], Any]
 
 
@@ -118,7 +118,6 @@ class Jsonb(_JsonWrapper):
 
 
 class _JsonDumper(Dumper):
-
     # The globally used JSON dumps() function. It can be changed globally (by
     # set_json_dumps) or by a subclass.
     _dumps: JsonDumpsFunction = json.dumps
@@ -127,39 +126,40 @@ class _JsonDumper(Dumper):
         super().__init__(cls, context)
         self.dumps = self.__class__._dumps
 
-    def dump(self, obj: _JsonWrapper) -> bytes:
-        dumps = obj.dumps or self.dumps
-        return dumps(obj.obj).encode()
+    def dump(self, obj: Any) -> bytes:
+        if isinstance(obj, _JsonWrapper):
+            dumps = obj.dumps or self.dumps
+            obj = obj.obj
+        else:
+            dumps = self.dumps
+        data = dumps(obj)
+        if isinstance(data, str):
+            return data.encode()
+        return data
 
 
 class JsonDumper(_JsonDumper):
-
     oid = postgres.types["json"].oid
 
 
 class JsonBinaryDumper(_JsonDumper):
-
     format = Format.BINARY
     oid = postgres.types["json"].oid
 
 
 class JsonbDumper(_JsonDumper):
-
     oid = postgres.types["jsonb"].oid
 
 
 class JsonbBinaryDumper(_JsonDumper):
-
     format = Format.BINARY
     oid = postgres.types["jsonb"].oid
 
-    def dump(self, obj: _JsonWrapper) -> bytes:
-        dumps = obj.dumps or self.dumps
-        return b"\x01" + dumps(obj.obj).encode()
+    def dump(self, obj: Any) -> bytes:
+        return b"\x01" + super().dump(obj)
 
 
 class _JsonLoader(Loader):
-
     # The globally used JSON loads() function. It can be changed globally (by
     # set_json_loads) or by a subclass.
     _loads: JsonLoadsFunction = json.loads
@@ -188,7 +188,6 @@ class JsonBinaryLoader(_JsonLoader):
 
 
 class JsonbBinaryLoader(_JsonLoader):
-
     format = Format.BINARY
 
     def load(self, data: Buffer) -> Any:

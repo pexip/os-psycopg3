@@ -83,9 +83,9 @@ def test_wait_bad(pgconn, waitfn):
 @pytest.mark.skipif(
     "sys.platform == 'win32'", reason="win32 works ok, but FDs are mysterious"
 )
-@pytest.mark.parametrize("waitfn", waitfns)
-def test_wait_large_fd(dsn, waitfn):
-    waitfn = getattr(waiting, waitfn)
+@pytest.mark.parametrize("fname", waitfns)
+def test_wait_large_fd(dsn, fname):
+    waitfn = getattr(waiting, fname)
 
     files = []
     try:
@@ -100,7 +100,7 @@ def test_wait_large_fd(dsn, waitfn):
             assert pgconn.socket > 1024
             pgconn.send_query(b"select 1")
             gen = generators.execute(pgconn)
-            if waitfn is waiting.wait_select:
+            if fname == "wait_select":
                 with pytest.raises(ValueError):
                     waitfn(gen, pgconn.socket)
             else:
@@ -114,21 +114,21 @@ def test_wait_large_fd(dsn, waitfn):
 
 
 @pytest.mark.parametrize("timeout", timeouts)
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_wait_conn_async(dsn, timeout):
     gen = generators.connect(dsn)
     conn = await waiting.wait_conn_async(gen, **timeout)
     assert conn.status == ConnStatus.OK
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_wait_conn_async_bad(dsn):
     gen = generators.connect("dbname=nosuchdb")
     with pytest.raises(psycopg.OperationalError):
         await waiting.wait_conn_async(gen)
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 @pytest.mark.parametrize("wait, ready", zip(waiting.Wait, waiting.Ready))
 @skip_if_not_linux
 async def test_wait_ready_async(wait, ready):
@@ -141,7 +141,7 @@ async def test_wait_ready_async(wait, ready):
     assert r & ready
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_wait_async(pgconn):
     pgconn.send_query(b"select 1")
     gen = generators.execute(pgconn)
@@ -149,7 +149,7 @@ async def test_wait_async(pgconn):
     assert res.status == ExecStatus.TUPLES_OK
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_wait_async_bad(pgconn):
     pgconn.send_query(b"select 1")
     gen = generators.execute(pgconn)

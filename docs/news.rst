@@ -10,6 +10,52 @@
 Current release
 ---------------
 
+Psycopg 3.1.10
+^^^^^^^^^^^^^^
+
+- Allow JSON dumpers to dump `bytes` directly instead of `str`,
+  for better compatibility with libraries like orjson and msgspec
+  (:ticket:`#569`)
+- Fix prepared statement cache validation when exiting pipeline mode (or
+  `~Cursor.executemany()`) in case an error occurred within the pipeline
+  (:ticket:`#585`).
+- Fix `connect()` to avoid "leaking" an open `~pq.PGconn` attached to the
+  `OperationalError` in case of connection failure. `Error.pgconn` is now a
+  shallow copy of the real libpq connection, and the latter is closed before
+  the exception propagates (:ticket:`#565`).
+- Fix possible (ignored) exception on objects deletion (:ticket:`#591`).
+- Don't clobber a Python exception raised during COPY FROM with the resulting
+  `!QueryCanceled` raised as a consequence (:ticket:`#593`).
+- Fix resetting `Connection.read_only` and `~Connection.deferrable` to their
+  default value using `!None` (:ticket:`#612`).
+- Add support for Python 3.12.
+
+
+Psycopg 3.1.9
+^^^^^^^^^^^^^
+
+- Fix `TypeInfo.fetch()` using a connection in `!sql_ascii` encoding
+  (:ticket:`#503`).
+- Fix "filedescriptor out of range" using a large number of files open
+  in Python implementation (:ticket:`#532`).
+- Allow JSON dumpers to be registered on `!dict` or any other object, as was
+  possible in psycopg2 (:ticket:`#541`).
+- Fix canceling running queries on process interruption in async connections
+  (:ticket:`#543`).
+- Fix loading ROW values with different types in the same query using the
+  binary protocol (:ticket:`#545`).
+- Fix dumping recursive composite types (:ticket:`#547`).
+
+
+Psycopg 3.1.8
+^^^^^^^^^^^^^
+
+- Don't pollute server logs when types looked for by `TypeInfo.fetch()`
+  are not found (:ticket:`#473`).
+- Set `Cursor.rowcount` to the number of rows of each result set from
+  `~Cursor.executemany()` when called with `!returning=True` (:ticket:`#479`).
+- Fix `TypeInfo.fetch()` when used with `ClientCursor` (:ticket:`#484`).
+
 Psycopg 3.1.7
 ^^^^^^^^^^^^^
 

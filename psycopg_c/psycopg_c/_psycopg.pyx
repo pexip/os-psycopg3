@@ -28,6 +28,12 @@ PG_BINARY = _py_Format.BINARY
 
 cdef extern from *:
     """
+/* Include this early to avoid a warning about redefined ARRAYSIZE in winnt.h */
+#ifdef MS_WINDOWS
+#define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
+#endif
+
 #ifndef ARRAYSIZE
 #define ARRAYSIZE(a) ((sizeof(a) / sizeof(*(a))))
 #endif

@@ -19,6 +19,7 @@ from . import adapt
 from . import errors as e
 from .abc import Buffer, ConnectionType, PQGen, Transformer
 from ._compat import create_task
+from .pq.misc import connection_summary
 from ._cmodule import _psycopg
 from ._encodings import pgconn_encoding
 from .generators import copy_from, copy_to, copy_end
@@ -112,7 +113,7 @@ class BaseCopy(Generic[ConnectionType]):
 
     def __repr__(self) -> str:
         cls = f"{self.__class__.__module__}.{self.__class__.__qualname__}"
-        info = pq.misc.connection_summary(self._pgconn)
+        info = connection_summary(self._pgconn)
         return f"<{cls} {info} at 0x{id(self):x}>"
 
     def _enter(self) -> None:
@@ -376,8 +377,16 @@ class LibpqWriter(Writer):
         else:
             bmsg = None
 
-        res = self.connection.wait(copy_end(self._pgconn, bmsg))
-        self.cursor._results = [res]
+        try:
+            res = self.connection.wait(copy_end(self._pgconn, bmsg))
+        # The QueryCanceled is expected if we sent an exception message to
+        # pgconn.put_copy_end(). The Python exception that generated that
+        # cancelling is more important, so don't clobber it.
+        except e.QueryCanceled:
+            if not bmsg:
+                raise
+        else:
+            self.cursor._results = [res]
 
 
 class QueuedLibpqDriver(LibpqWriter):
@@ -461,7 +470,7 @@ class FileWriter(Writer):
         self.file = file
 
     def write(self, data: Buffer) -> None:
-        self.file.write(data)  # type: ignore[arg-type]
+        self.file.write(data)
 
 
 class AsyncCopy(BaseCopy["AsyncConnection[Any]"]):
@@ -583,8 +592,16 @@ class AsyncLibpqWriter(AsyncWriter):
         else:
             bmsg = None
 
-        res = await self.connection.wait(copy_end(self._pgconn, bmsg))
-        self.cursor._results = [res]
+        try:
+            res = await self.connection.wait(copy_end(self._pgconn, bmsg))
+        # The QueryCanceled is expected if we sent an exception message to
+        # pgconn.put_copy_end(). The Python exception that generated that
+        # cancelling is more important, so don't clobber it.
+        except e.QueryCanceled:
+            if not bmsg:
+                raise
+        else:
+            self.cursor._results = [res]
 
 
 class AsyncQueuedLibpqWriter(AsyncLibpqWriter):
@@ -669,7 +686,6 @@ class Formatter(ABC):
 
 
 class TextFormatter(Formatter):
-
     format = TEXT
 
     def __init__(self, transformer: Transformer, encoding: str = "utf-8"):
@@ -714,7 +730,6 @@ class TextFormatter(Formatter):
 
 
 class BinaryFormatter(Formatter):
-
     format = BINARY
 
     def __init__(self, transformer: Transformer):

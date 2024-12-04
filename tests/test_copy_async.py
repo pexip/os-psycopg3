@@ -24,7 +24,6 @@ from .test_copy import sample_values, sample_records, sample_tabledef
 from .test_copy import py_to_raw, special_chars
 
 pytestmark = [
-    pytest.mark.asyncio,
     pytest.mark.crdb_skip("copy"),
 ]
 
@@ -264,7 +263,7 @@ async def test_copy_in_str(aconn):
 async def test_copy_in_error(aconn):
     cur = aconn.cursor()
     await ensure_table(cur, sample_tabledef)
-    with pytest.raises(e.QueryCanceled):
+    with pytest.raises(TypeError):
         async with cur.copy("copy copy_in from stdin (format binary)") as copy:
             await copy.write(sample_text.decode())
 
@@ -313,7 +312,7 @@ async def test_subclass_adapter(aconn, format):
     if format == Format.TEXT:
         from psycopg.types.string import StrDumper as BaseDumper
     else:
-        from psycopg.types.string import (  # type: ignore[no-redef]
+        from psycopg.types.string import (  # type: ignore[assignment]
             StrBinaryDumper as BaseDumper,
         )
 
@@ -340,11 +339,10 @@ async def test_subclass_adapter(aconn, format):
 async def test_copy_in_error_empty(aconn, format):
     cur = aconn.cursor()
     await ensure_table(cur, sample_tabledef)
-    with pytest.raises(e.QueryCanceled) as exc:
+    with pytest.raises(ZeroDivisionError, match="mannaggiamiseria"):
         async with cur.copy(f"copy copy_in from stdin (format {format.name})"):
-            raise Exception("mannaggiamiseria")
+            raise ZeroDivisionError("mannaggiamiseria")
 
-    assert "mannaggiamiseria" in str(exc.value)
     assert aconn.info.transaction_status == aconn.TransactionStatus.INERROR
 
 
@@ -362,12 +360,11 @@ async def test_copy_in_buffers_with_pg_error(aconn):
 async def test_copy_in_buffers_with_py_error(aconn):
     cur = aconn.cursor()
     await ensure_table(cur, sample_tabledef)
-    with pytest.raises(e.QueryCanceled) as exc:
+    with pytest.raises(ZeroDivisionError, match="nuttengoggenio"):
         async with cur.copy("copy copy_in from stdin (format text)") as copy:
             await copy.write(sample_text)
-            raise Exception("nuttengoggenio")
+            raise ZeroDivisionError("nuttengoggenio")
 
-    assert "nuttengoggenio" in str(exc.value)
     assert aconn.info.transaction_status == aconn.TransactionStatus.INERROR
 
 
