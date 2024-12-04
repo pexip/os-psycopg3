@@ -1,0 +1,256 @@
+name: Build packages
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '28 7 * * sun'
+
+jobs:
+
+  sdist:  # {{{
+    runs-on: ubuntu-latest
+    if: true
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {package: psycopg, format: sdist, impl: python}
+          - {package: psycopg, format: wheel, impl: python}
+          - {package: psycopg_c, format: sdist, impl: c}
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: 3.9
+
+      - name: Create the sdist packages
+        run: |-
+          python ${{ matrix.package }}/setup.py sdist -d `pwd`/dist/
+        if: ${{ matrix.format == 'sdist' }}
+
+      - name: Create the wheel packages
+        run: |-
+          pip install wheel
+          python ${{ matrix.package }}/setup.py bdist_wheel -d `pwd`/dist/
+        if: ${{ matrix.format == 'wheel' }}
+
+      - name: Install the Python package and test requirements
+        run: |-
+          pip install `ls dist/*`[test]
+          pip install ./psycopg_pool
+        if: ${{ matrix.package == 'psycopg' }}
+
+      - name: Install the C package and test requirements
+        run: |-
+          pip install dist/*
+          pip install ./psycopg[test]
+          pip install ./psycopg_pool
+        if: ${{ matrix.package == 'psycopg_c' }}
+
+      - name: Test the sdist package
+        run: pytest -m 'not slow and not flakey' --color yes
+        env:
+          PSYCOPG_IMPL: ${{ matrix.impl }}
+          PSYCOPG_TEST_DSN: "host=127.0.0.1 user=postgres"
+          PGPASSWORD: password
+
+      - uses: actions/upload-artifact@v3
+        with:
+          path: ./dist/*
+
+    services:
+      postgresql:
+        image: postgres:14
+        env:
+          POSTGRES_PASSWORD: password
+        ports:
+          - 5432:5432
+        # Set health checks to wait until postgres has started
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+
+  # }}}
+
+  linux:  # {{{
+    runs-on: ubuntu-latest
+    if: true
+
+    env:
+      LIBPQ_VERSION: "15.1"
+      OPENSSL_VERSION: "1.1.1s"
+
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, i686, ppc64le, aarch64]
+        pyver: [cp37, cp38, cp39, cp310, cp311]
+        platform: [manylinux, musllinux]
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up QEMU for multi-arch build
+        # Check https://github.com/docker/setup-qemu-action for newer versions.
+        uses: docker/setup-qemu-action@v2
+        with:
+          # Note: 6.2.0 is buggy: make sure to avoid it.
+          # See https://github.com/pypa/cibuildwheel/issues/1250
+          image: tonistiigi/binfmt:qemu-v7.0.0
+
+      - name: Cache libpq build
+        uses: actions/cache@v3
+        with:
+          path: /tmp/libpq.build
+          key: libpq-${{ env.LIBPQ_VERSION }}-${{ matrix.platform }}-${{ matrix.arch }}-2
+
+      - name: Create the binary package source tree
+        run: python3 ./tools/build/copy_to_binary.py
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.9.0
+        with:
+          package-dir: psycopg_binary
+        env:
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux2014
+          CIBW_MANYLINUX_I686_IMAGE: manylinux2014
+          CIBW_MANYLINUX_AARCH64_IMAGE: manylinux2014
+          CIBW_MANYLINUX_PPC64LE_IMAGE: manylinux2014
+          CIBW_BUILD: ${{matrix.pyver}}-${{matrix.platform}}_${{matrix.arch}}
+          CIBW_ARCHS_LINUX: auto aarch64 ppc64le
+          CIBW_BEFORE_ALL_LINUX: ./tools/build/wheel_linux_before_all.sh
+          CIBW_REPAIR_WHEEL_COMMAND: >-
+            ./tools/build/strip_wheel.sh {wheel}
+            && auditwheel repair -w {dest_dir} {wheel}
+          CIBW_TEST_REQUIRES: ./psycopg[test] ./psycopg_pool
+          CIBW_TEST_COMMAND: >-
+            pytest {project}/tests -m 'not slow and not flakey' --color yes
+          CIBW_ENVIRONMENT_PASS_LINUX: LIBPQ_VERSION OPENSSL_VERSION
+          CIBW_ENVIRONMENT: >-
+            PSYCOPG_IMPL=binary
+            PSYCOPG_TEST_DSN='host=172.17.0.1 user=postgres'
+            PGPASSWORD=password
+            LIBPQ_BUILD_PREFIX=/host/tmp/libpq.build
+            PATH="$LIBPQ_BUILD_PREFIX/bin:$PATH"
+            LD_LIBRARY_PATH="$LIBPQ_BUILD_PREFIX/lib"
+            PSYCOPG_TEST_WANT_LIBPQ_BUILD=${{ env.LIBPQ_VERSION }}
+            PSYCOPG_TEST_WANT_LIBPQ_IMPORT=${{ env.LIBPQ_VERSION }}
+
+      - uses: actions/upload-artifact@v3
+        with:
+          path: ./wheelhouse/*.whl
+
+    services:
+      postgresql:
+        image: postgres:14
+        env:
+          POSTGRES_PASSWORD: password
+        ports:
+          - 5432:5432
+        # Set health checks to wait until postgres has started
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+
+  # }}}
+
+  macos:  # {{{
+    runs-on: macos-latest
+    if: true
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # These archs require an Apple M1 runner: [arm64, universal2]
+        arch: [x86_64]
+        pyver: [cp37, cp38, cp39, cp310, cp311]
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Create the binary package source tree
+        run: python3 ./tools/build/copy_to_binary.py
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.9.0
+        with:
+          package-dir: psycopg_binary
+        env:
+          CIBW_BUILD: ${{matrix.pyver}}-macosx_${{matrix.arch}}
+          CIBW_ARCHS_MACOS: x86_64
+          CIBW_BEFORE_ALL_MACOS: ./tools/build/wheel_macos_before_all.sh
+          CIBW_TEST_REQUIRES: ./psycopg[test] ./psycopg_pool
+          CIBW_TEST_COMMAND: >-
+            pytest {project}/tests -m 'not slow and not flakey' --color yes
+          CIBW_ENVIRONMENT: >-
+            PSYCOPG_IMPL=binary
+            PSYCOPG_TEST_DSN='dbname=postgres'
+            PSYCOPG_TEST_WANT_LIBPQ_BUILD=">= 14"
+            PSYCOPG_TEST_WANT_LIBPQ_IMPORT=">= 14"
+
+      - uses: actions/upload-artifact@v3
+        with:
+          path: ./wheelhouse/*.whl
+
+
+  # }}}
+
+  windows:  # {{{
+    runs-on: windows-latest
+    if: true
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Might want to add win32, untested at the moment.
+        arch: [win_amd64]
+        pyver: [cp37, cp38, cp39, cp310, cp311]
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Start PostgreSQL service for test
+        run: |
+          $PgSvc = Get-Service "postgresql*"
+          Set-Service $PgSvc.Name -StartupType manual
+          $PgSvc.Start()
+
+      - name: Create the binary package source tree
+        run: python3 ./tools/build/copy_to_binary.py
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.9.0
+        with:
+          package-dir: psycopg_binary
+        env:
+          CIBW_BUILD: ${{matrix.pyver}}-${{matrix.arch}}
+          CIBW_ARCHS_WINDOWS: AMD64 x86
+          CIBW_BEFORE_BUILD_WINDOWS: '.\tools\build\wheel_win32_before_build.bat'
+          CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: >-
+            delvewheel repair -w {dest_dir}
+            --no-mangle "libiconv-2.dll;libwinpthread-1.dll" {wheel}
+          CIBW_TEST_REQUIRES: ./psycopg[test] ./psycopg_pool
+          CIBW_TEST_COMMAND: >-
+            pytest {project}/tests -m "not slow and not flakey" --color yes
+          CIBW_ENVIRONMENT_WINDOWS: >-
+            PSYCOPG_IMPL=binary
+            PATH="C:\\Program Files\\PostgreSQL\\14\\bin;$PATH"
+            PSYCOPG_TEST_DSN="host=127.0.0.1 user=postgres"
+            PSYCOPG_TEST_WANT_LIBPQ_BUILD=">= 14"
+            PSYCOPG_TEST_WANT_LIBPQ_IMPORT=">= 14"
+
+      - uses: actions/upload-artifact@v3
+        with:
+          path: ./wheelhouse/*.whl
+
+
+  # }}}

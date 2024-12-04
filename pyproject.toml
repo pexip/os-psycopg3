@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=49.2.0", "wheel>=0.37"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+filterwarnings = [
+    "error",
+]
+testpaths=[
+    "tests",
+]
+# Note: On Travis they these options seem to leak objects
+# log_format = "%(asctime)s.%(msecs)03d %(levelname)-8s %(name)s:%(filename)s:%(lineno)d %(message)s"
+# log_level = "DEBUG"
+
+[tool.coverage.run]
+source = [
+    "psycopg/psycopg",
+    "psycopg_pool/psycopg_pool",
+]
+[tool.coverage.report]
+exclude_lines = [
+    "if TYPE_CHECKING:",
+    '\.\.\.$',
+]
+
+[tool.mypy]
+files = [
+    "psycopg/psycopg",
+    "psycopg_pool/psycopg_pool",
+    "psycopg_c/psycopg_c",
+    "tests",
+]
+warn_unused_ignores = true
+show_error_codes = true
+disable_bytearray_promotion = true
+disable_memoryview_promotion = true
+strict = true
+
+[[tool.mypy.overrides]]
+module = [
+    "shapely.*",
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "uvloop"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+check_untyped_defs = true
+disallow_untyped_defs = false
+disallow_untyped_calls = false

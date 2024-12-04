@@ -1,0 +1,140 @@
+---
+# You can find our sponsors at https://www.psycopg.org/sponsors/ Thank you!
+
+- username: postgrespro
+  tier: top
+  avatar: https://avatars.githubusercontent.com/u/12005770?v=4
+  name: Postgres Professional
+  website: https://postgrespro.com/
+
+- username: commandprompt
+  by: jdatcmd
+  tier: top
+  avatar: https://avatars.githubusercontent.com/u/339156?v=4
+  name: Command Prompt, Inc.
+  website: https://www.commandprompt.com
+
+- username: bitdotioinc
+  tier: top
+  avatar: https://avatars.githubusercontent.com/u/56135630?v=4
+  name: bit.io
+  website: https://bit.io/?utm_campaign=sponsorship&utm_source=psycopg2&utm_medium=web
+  keep_website: true
+
+
+- username: yougov
+  tier: mid
+  avatar: https://avatars.githubusercontent.com/u/378494?v=4
+  name: YouGov
+  website: https://www.yougov.com
+
+- username: phenopolis
+  by: pontikos
+  tier: mid
+  avatar: https://avatars.githubusercontent.com/u/20042742?v=4
+  name: Phenopolis
+  website: http://www.phenopolis.co.uk
+
+- username: MaterializeInc
+  tier: mid
+  avatar: https://avatars.githubusercontent.com/u/47674186?v=4
+  name: Materialize, Inc.
+  website: http://materialize.com
+
+- username: getsentry
+  tier: mid
+  avatar: https://avatars.githubusercontent.com/u/1396951?v=4
+  name: Sentry
+  website: https://sentry.io
+
+- username: 20tab
+  tier: mid
+  avatar: https://avatars.githubusercontent.com/u/1843159?v=4
+  name: 20tab srl
+  website: http://www.20tab.com
+
+- username: genropy
+  by: gporcari
+  tier: mid
+  avatar: https://avatars.githubusercontent.com/u/7373189?v=4
+  name: genropy
+  website: http://www.genropy.org
+
+- username: svennek
+  tier: mid
+  avatar: https://avatars.githubusercontent.com/u/37837?v=4
+  name: Svenne Krap
+  website: http://www.svenne.dk
+
+- username: mailupinc
+  tier: mid
+  avatar: https://avatars.githubusercontent.com/u/72260631?v=4
+  name: BEE
+  website: https://beefree.io
+
+
+- username: taifu
+  avatar: https://avatars.githubusercontent.com/u/115712?v=4
+  name: Marco Beri
+  website: http:/beri.it
+
+- username: la-mar
+  avatar: https://avatars.githubusercontent.com/u/16618300?v=4
+  name: Brock Friedrich
+
+- username: xarg
+  avatar: https://avatars.githubusercontent.com/u/94721?v=4
+  name: Alex Plugaru
+  website: https://plugaru.org
+
+- username: dalibo
+  avatar: https://avatars.githubusercontent.com/u/182275?v=4
+  name: Dalibo
+  website: http://www.dalibo.com
+
+- username: rafmagns-skepa-dreag
+  avatar: https://avatars.githubusercontent.com/u/7447491?v=4
+  name: Richard H
+
+- username: rustprooflabs
+  avatar: https://avatars.githubusercontent.com/u/3085224?v=4
+  name: Ryan Lambert
+  website: https://www.rustprooflabs.com
+
+- username: logilab
+  avatar: https://avatars.githubusercontent.com/u/446566?v=4
+  name: Logilab
+  website: http://www.logilab.org
+
+- username: asqui
+  avatar: https://avatars.githubusercontent.com/u/174182?v=4
+  name: Daniel Fortunov
+
+- username: iqbalabd
+  avatar: https://avatars.githubusercontent.com/u/14254614?v=4
+  name: Iqbal Abdullah
+  website: https://info.xoxzo.com/
+
+- username: healthchecks
+  avatar: https://avatars.githubusercontent.com/u/13053880?v=4
+  name: Healthchecks
+  website: https://healthchecks.io
+
+- username: c-rindi
+  avatar: https://avatars.githubusercontent.com/u/7826876?v=4
+  name: C~+
+
+- username: Intevation
+  by: bernhardreiter
+  avatar: https://avatars.githubusercontent.com/u/2050405?v=4
+  name: Intevation
+  website: https://www.intevation.de/
+
+- username: abegerho
+  avatar: https://avatars.githubusercontent.com/u/5734243?v=4
+  name: Abhishek Begerhotta
+
+- username: ferpection
+  avatar: https://avatars.githubusercontent.com/u/6997008?v=4
+  name: Ferpection
+  website: https://ferpection.com
