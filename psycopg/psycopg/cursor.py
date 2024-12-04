@@ -9,6 +9,7 @@ from types import TracebackType
 from typing import Any, Generic, Iterable, Iterator, List
 from typing import Optional, NoReturn, Sequence, Tuple, Type, TypeVar
 from typing import overload, TYPE_CHECKING
+from warnings import warn
 from contextlib import contextmanager
 
 from . import pq
@@ -18,6 +19,7 @@ from .abc import ConnectionType, Query, Params, PQGen
 from .copy import Copy, Writer as CopyWriter
 from .rows import Row, RowMaker, RowFactory
 from ._column import Column
+from .pq.misc import connection_summary
 from ._queries import PostgresQuery, PostgresClientQuery
 from ._pipeline import Pipeline
 from ._encodings import pgconn_encoding
@@ -83,7 +85,7 @@ class BaseCursor(Generic[ConnectionType, Row]):
 
     def __repr__(self) -> str:
         cls = f"{self.__class__.__module__}.{self.__class__.__qualname__}"
-        info = pq.misc.connection_summary(self._pgconn)
+        info = connection_summary(self._pgconn)
         if self._closed:
             status = "closed"
         elif self.pgresult:
@@ -155,6 +157,18 @@ class BaseCursor(Generic[ConnectionType, Row]):
         Return `!True` if a new result is available, which will be the one
         methods `!fetch*()` will operate on.
         """
+        # Raise a warning if people is calling nextset() in pipeline mode
+        # after a sequence of execute() in pipeline mode. Pipeline accumulating
+        # execute() results in the cursor is an unintended difference w.r.t.
+        # non-pipeline mode.
+        if self._execmany_returning is None and self._conn._pipeline:
+            warn(
+                "using nextset() in pipeline mode for several execute() is"
+                " deprecated and will be dropped in 3.2; please use different"
+                " cursors to receive more than one result",
+                DeprecationWarning,
+            )
+
         if self._iresult < len(self._results) - 1:
             self._select_current_result(self._iresult + 1)
             return True
@@ -219,7 +233,8 @@ class BaseCursor(Generic[ConnectionType, Row]):
         assert pipeline
 
         yield from self._start_query(query)
-        self._rowcount = 0
+        if not returning:
+            self._rowcount = 0
 
         assert self._execmany_returning is None
         self._execmany_returning = returning
@@ -251,8 +266,9 @@ class BaseCursor(Generic[ConnectionType, Row]):
         Generator implementing `Cursor.executemany()` with pipelines not available.
         """
         yield from self._start_query(query)
+        if not returning:
+            self._rowcount = 0
         first = True
-        nrows = 0
         for params in params_seq:
             if first:
                 pgq = self._convert_query(query, params)
@@ -266,17 +282,15 @@ class BaseCursor(Generic[ConnectionType, Row]):
             self._check_results(results)
             if returning:
                 self._results.extend(results)
-
-            for res in results:
-                nrows += res.command_tuples or 0
+            else:
+                # In non-returning case, set rowcount to the cumulated number
+                # of rows of executed queries.
+                for res in results:
+                    self._rowcount += res.command_tuples or 0
 
         if self._results:
             self._select_current_result(0)
 
-        # Override rowcount for the first result. Calls to nextset() will change
-        # it to the value of that result only, but we hope nobody will notice.
-        # You haven't read this comment.
-        self._rowcount = nrows
         self._last_query = query
 
         for cmd in self._conn._prepared.get_maintenance_commands():
@@ -545,16 +559,11 @@ class BaseCursor(Generic[ConnectionType, Row]):
                 self._results.extend(results)
                 if first_batch:
                     self._select_current_result(0)
-                    self._rowcount = 0
-
-            # Override rowcount for the first result. Calls to nextset() will
-            # change it to the value of that result only, but we hope nobody
-            # will notice.
-            # You haven't read this comment.
-            if self._rowcount < 0:
-                self._rowcount = 0
-            for res in results:
-                self._rowcount += res.command_tuples or 0
+            else:
+                # In non-returning case, set rowcount to the cumulated number of
+                # rows of executed queries.
+                for res in results:
+                    self._rowcount += res.command_tuples or 0
 
     def _send_prepare(self, name: bytes, query: PostgresQuery) -> None:
         if self._conn._pipeline:
@@ -724,7 +733,7 @@ class Cursor(BaseCursor["Connection[Any]", Row]):
                 self._conn.wait(
                     self._execute_gen(query, params, prepare=prepare, binary=binary)
                 )
-        except e.Error as ex:
+        except e._NO_TRACEBACK as ex:
             raise ex.with_traceback(None)
         return self
 
@@ -759,7 +768,7 @@ class Cursor(BaseCursor["Connection[Any]", Row]):
                     self._conn.wait(
                         self._executemany_gen_no_pipeline(query, params_seq, returning)
                     )
-        except e.Error as ex:
+        except e._NO_TRACEBACK as ex:
             raise ex.with_traceback(None)
 
     def stream(
@@ -776,7 +785,6 @@ class Cursor(BaseCursor["Connection[Any]", Row]):
             raise e.ProgrammingError("stream() cannot be used in pipeline mode")
 
         with self._conn.lock:
-
             try:
                 self._conn.wait(self._stream_send_gen(query, params, binary=binary))
                 first = True
@@ -786,7 +794,7 @@ class Cursor(BaseCursor["Connection[Any]", Row]):
                     yield rec
                     first = False
 
-            except e.Error as ex:
+            except e._NO_TRACEBACK as ex:
                 raise ex.with_traceback(None)
 
             finally:
@@ -904,7 +912,7 @@ class Cursor(BaseCursor["Connection[Any]", Row]):
 
             with Copy(self, writer=writer) as copy:
                 yield copy
-        except e.Error as ex:
+        except e._NO_TRACEBACK as ex:
             raise ex.with_traceback(None)
 
         # If a fresher result has been set on the cursor by the Copy object,

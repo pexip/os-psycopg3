@@ -4,7 +4,6 @@ import psycopg
 from psycopg.pq import TransactionStatus
 
 pytestmark = [
-    pytest.mark.asyncio,
     pytest.mark.crdb_skip("2-phase commit"),
 ]
 
@@ -185,7 +184,7 @@ class TestTPC:
 
         # check the values returned
         assert len(okvals) == len(xids)
-        for (xid, (gid, prepared, owner, database)) in zip(xids, okvals):
+        for xid, (gid, prepared, owner, database) in zip(xids, okvals):
             assert xid.gtrid == gid
             assert xid.prepared == prepared
             assert xid.owner == owner

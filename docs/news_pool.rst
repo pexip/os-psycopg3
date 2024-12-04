@@ -7,8 +7,32 @@
 ``psycopg_pool`` release notes
 ==============================
 
+Future releases
+---------------
+
+psycopg_pool 3.1.8 (unreleased)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+- Enforce connections' ``max_lifetime`` on `~ConnectionPool.check()`
+  (:ticket:`#482`).
+
+
 Current release
 ---------------
+
+psycopg_pool 3.1.7
+^^^^^^^^^^^^^^^^^^
+
+- Fix handling of tasks cancelled while waiting in async pool queue
+  (:ticket:`#503`).
+
+
+psycopg_pool 3.1.6
+^^^^^^^^^^^^^^^^^^
+
+- Declare all parameters in pools constructors, instead of using `!**kwargs`
+  (:ticket:`#493`).
+
 
 psycopg_pool 3.1.5
 ^^^^^^^^^^^^^^^^^^

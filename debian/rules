@@ -43,6 +43,7 @@ override_dh_auto_clean:
 	PYBUILD_DIR=psycopg_pool dh_auto_clean -- --name psycopg_pool
 # Not buildable yet - requires Cython newer than currently in Debian
 #	PYBUILD_DIR=psycopg_c dh_auto_clean -- --name psycopg_c
+	rm -rf docs/_build
 
 override_dh_auto_configure:
 	PYBUILD_DIR=psycopg dh_auto_configure -- --name psycopg

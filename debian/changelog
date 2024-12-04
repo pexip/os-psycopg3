@@ -1,3 +1,20 @@
+psycopg3 (3.1.10-1+pexip24u1) pexip; urgency=medium
+
+  * Update to 3.1.10-1
+
+ -- John-Mark Bell <jmb@pexip.com>  Wed, 04 Dec 2024 16:06:10 +0000
+
+psycopg3 (3.1.10-1) unstable; urgency=medium
+
+  * Team upload
+  * [b280f01] d/watch: Reorder options to one option per line
+  * [3eda65d] New upstream version 3.1.10
+  * [9ce62b4] d/copyright: Update content and year data
+  * [acbf568] d/rules: Extend override_dh_clean
+    (Closes: #1049246)
+
+ -- Carsten Schoenert <c.schoenert@t-online.de>  Wed, 06 Sep 2023 13:28:49 +0530
+
 psycopg3 (3.1.7-4+pexip24u1) pexip; urgency=medium
 
   * Prepare Pexip packaging

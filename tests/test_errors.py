@@ -1,3 +1,4 @@
+import sys
 import pickle
 from typing import List
 from weakref import ref
@@ -10,6 +11,18 @@ from psycopg import errors as e
 
 from .utils import eur, gc_collect
 from .fix_crdb import is_crdb
+
+
+def test_finishedpgconn(pgconn):
+    with pytest.raises(TypeError):
+        e.FinishedPGconn.connect()
+
+    assert pgconn.socket
+    finished = e.finish_pgconn(pgconn)
+    with pytest.raises(e.OperationalError, match="connection is closed"):
+        finished.socket
+    with pytest.raises(e.OperationalError, match="connection is closed"):
+        pgconn.socket
 
 
 @pytest.mark.crdb_skip("severity_nonlocalized")
@@ -170,6 +183,10 @@ def test_diag_pickle(conn):
 
 
 @pytest.mark.slow
+@pytest.mark.xfail(
+    (pq.__impl__ in ("c", "binary") and sys.version_info[:2] == (3, 12)),
+    reason="Something with Exceptions, C, Python 3.12",
+)
 def test_diag_survives_cursor(conn):
     cur = conn.cursor()
     with pytest.raises(e.Error) as exc:
@@ -216,7 +233,6 @@ def test_diag_from_commit(conn):
     assert exc.value.diag.sqlstate == "23503"
 
 
-@pytest.mark.asyncio
 @pytest.mark.crdb_skip("deferrable")
 async def test_diag_from_commit_async(aconn):
     cur = aconn.cursor()

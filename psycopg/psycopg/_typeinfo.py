@@ -12,13 +12,14 @@ from typing import Sequence, Tuple, Type, TypeVar, Union, TYPE_CHECKING
 from typing_extensions import TypeAlias
 
 from . import errors as e
-from .abc import AdaptContext
+from .abc import AdaptContext, Query
 from .rows import dict_row
+from ._encodings import conn_encoding
 
 if TYPE_CHECKING:
-    from .connection import Connection
+    from .connection import BaseConnection, Connection
     from .connection_async import AsyncConnection
-    from .sql import Identifier
+    from .sql import Identifier, SQL
 
 T = TypeVar("T", bound="TypeInfo")
 RegistryKey: TypeAlias = Union[str, int, Tuple[type, int]]
@@ -62,34 +63,41 @@ class TypeInfo:
     @overload
     @classmethod
     async def fetch(
-        cls: Type[T],
-        conn: "AsyncConnection[Any]",
-        name: Union[str, "Identifier"],
+        cls: Type[T], conn: "AsyncConnection[Any]", name: Union[str, "Identifier"]
     ) -> Optional[T]:
         ...
 
     @classmethod
     def fetch(
-        cls: Type[T],
-        conn: "Union[Connection[Any], AsyncConnection[Any]]",
-        name: Union[str, "Identifier"],
+        cls: Type[T], conn: "BaseConnection[Any]", name: Union[str, "Identifier"]
     ) -> Any:
         """Query a system catalog to read information about a type."""
         from .sql import Composable
+        from .connection import Connection
         from .connection_async import AsyncConnection
 
         if isinstance(name, Composable):
             name = name.as_string(conn)
 
-        if isinstance(conn, AsyncConnection):
+        if isinstance(conn, Connection):
+            return cls._fetch(conn, name)
+        elif isinstance(conn, AsyncConnection):
             return cls._fetch_async(conn, name)
+        else:
+            raise TypeError(
+                f"expected Connection or AsyncConnection, got {type(conn).__name__}"
+            )
 
+    @classmethod
+    def _fetch(cls: Type[T], conn: "Connection[Any]", name: str) -> Optional[T]:
         # This might result in a nested transaction. What we want is to leave
         # the function with the connection in the state we found (either idle
         # or intrans)
         try:
             with conn.transaction():
-                with conn.cursor(binary=True, row_factory=dict_row) as cur:
+                if conn_encoding(conn) == "ascii":
+                    conn.execute("set local client_encoding to utf8")
+                with conn.cursor(row_factory=dict_row) as cur:
                     cur.execute(cls._get_info_query(conn), {"name": name})
                     recs = cur.fetchall()
         except e.UndefinedObject:
@@ -101,14 +109,11 @@ class TypeInfo:
     async def _fetch_async(
         cls: Type[T], conn: "AsyncConnection[Any]", name: str
     ) -> Optional[T]:
-        """
-        Query a system catalog to read information about a type.
-
-        Similar to `fetch()` but can use an asynchronous connection.
-        """
         try:
             async with conn.transaction():
-                async with conn.cursor(binary=True, row_factory=dict_row) as cur:
+                if conn_encoding(conn) == "ascii":
+                    await conn.execute("set local client_encoding to utf8")
+                async with conn.cursor(row_factory=dict_row) as cur:
                     await cur.execute(cls._get_info_query(conn), {"name": name})
                     recs = await cur.fetchall()
         except e.UndefinedObject:
@@ -146,17 +151,43 @@ class TypeInfo:
             register_array(self, context)
 
     @classmethod
-    def _get_info_query(
-        cls, conn: "Union[Connection[Any], AsyncConnection[Any]]"
-    ) -> str:
-        return """\
+    def _get_info_query(cls, conn: "BaseConnection[Any]") -> Query:
+        from .sql import SQL
+
+        return SQL(
+            """\
 SELECT
     typname AS name, oid, typarray AS array_oid,
     oid::regtype::text AS regtype, typdelim AS delimiter
 FROM pg_type t
-WHERE t.oid = %(name)s::regtype
+WHERE t.oid = {regtype}
 ORDER BY t.oid
 """
+        ).format(regtype=cls._to_regtype(conn))
+
+    @classmethod
+    def _has_to_regtype_function(cls, conn: "BaseConnection[Any]") -> bool:
+        # to_regtype() introduced in PostgreSQL 9.4 and CockroachDB 22.2
+        info = conn.info
+        if info.vendor == "PostgreSQL":
+            return info.server_version >= 90400
+        elif info.vendor == "CockroachDB":
+            return info.server_version >= 220200
+        else:
+            return False
+
+    @classmethod
+    def _to_regtype(cls, conn: "BaseConnection[Any]") -> "SQL":
+        # `to_regtype()` returns the type oid or NULL, unlike the :: operator,
+        # which returns the type or raises an exception, which requires
+        # a transaction rollback and leaves traces in the server logs.
+
+        from .sql import SQL
+
+        if cls._has_to_regtype_function(conn):
+            return SQL("to_regtype(%(name)s)")
+        else:
+            return SQL("%(name)s::regtype")
 
     def _added(self, registry: "TypesRegistry") -> None:
         """Method called by the `!registry` when the object is added there."""
@@ -181,17 +212,19 @@ class RangeInfo(TypeInfo):
         self.subtype_oid = subtype_oid
 
     @classmethod
-    def _get_info_query(
-        cls, conn: "Union[Connection[Any], AsyncConnection[Any]]"
-    ) -> str:
-        return """\
+    def _get_info_query(cls, conn: "BaseConnection[Any]") -> Query:
+        from .sql import SQL
+
+        return SQL(
+            """\
 SELECT t.typname AS name, t.oid AS oid, t.typarray AS array_oid,
     t.oid::regtype::text AS regtype,
     r.rngsubtype AS subtype_oid
 FROM pg_type t
 JOIN pg_range r ON t.oid = r.rngtypid
-WHERE t.oid = %(name)s::regtype
+WHERE t.oid = {regtype}
 """
+        ).format(regtype=cls._to_regtype(conn))
 
     def _added(self, registry: "TypesRegistry") -> None:
         # Map ranges subtypes to info
@@ -201,8 +234,7 @@ WHERE t.oid = %(name)s::regtype
 class MultirangeInfo(TypeInfo):
     """Manage information about a multirange type."""
 
-    # TODO: expose to multirange module once added
-    # __module__ = "psycopg.types.multirange"
+    __module__ = "psycopg.types.multirange"
 
     def __init__(
         self,
@@ -219,21 +251,24 @@ class MultirangeInfo(TypeInfo):
         self.subtype_oid = subtype_oid
 
     @classmethod
-    def _get_info_query(
-        cls, conn: "Union[Connection[Any], AsyncConnection[Any]]"
-    ) -> str:
+    def _get_info_query(cls, conn: "BaseConnection[Any]") -> Query:
+        from .sql import SQL
+
         if conn.info.server_version < 140000:
             raise e.NotSupportedError(
                 "multirange types are only available from PostgreSQL 14"
             )
-        return """\
+
+        return SQL(
+            """\
 SELECT t.typname AS name, t.oid AS oid, t.typarray AS array_oid,
     t.oid::regtype::text AS regtype,
     r.rngtypid AS range_oid, r.rngsubtype AS subtype_oid
 FROM pg_type t
 JOIN pg_range r ON t.oid = r.rngmultitypid
-WHERE t.oid = %(name)s::regtype
+WHERE t.oid = {regtype}
 """
+        ).format(regtype=cls._to_regtype(conn))
 
     def _added(self, registry: "TypesRegistry") -> None:
         # Map multiranges ranges and subtypes to info
@@ -263,15 +298,16 @@ class CompositeInfo(TypeInfo):
         self.python_type: Optional[type] = None
 
     @classmethod
-    def _get_info_query(
-        cls, conn: "Union[Connection[Any], AsyncConnection[Any]]"
-    ) -> str:
-        return """\
+    def _get_info_query(cls, conn: "BaseConnection[Any]") -> Query:
+        from .sql import SQL
+
+        return SQL(
+            """\
 SELECT
     t.typname AS name, t.oid AS oid, t.typarray AS array_oid,
     t.oid::regtype::text AS regtype,
-    coalesce(a.fnames, '{}') AS field_names,
-    coalesce(a.ftypes, '{}') AS field_types
+    coalesce(a.fnames, '{{}}') AS field_names,
+    coalesce(a.ftypes, '{{}}') AS field_types
 FROM pg_type t
 LEFT JOIN (
     SELECT
@@ -282,15 +318,16 @@ LEFT JOIN (
         SELECT a.attrelid, a.attname, a.atttypid
         FROM pg_attribute a
         JOIN pg_type t ON t.typrelid = a.attrelid
-        WHERE t.oid = %(name)s::regtype
+        WHERE t.oid = {regtype}
         AND a.attnum > 0
         AND NOT a.attisdropped
         ORDER BY a.attnum
     ) x
     GROUP BY attrelid
 ) a ON a.attrelid = t.typrelid
-WHERE t.oid = %(name)s::regtype
+WHERE t.oid = {regtype}
 """
+        ).format(regtype=cls._to_regtype(conn))
 
 
 class EnumInfo(TypeInfo):
@@ -311,10 +348,11 @@ class EnumInfo(TypeInfo):
         self.enum: Optional[Type[Enum]] = None
 
     @classmethod
-    def _get_info_query(
-        cls, conn: "Union[Connection[Any], AsyncConnection[Any]]"
-    ) -> str:
-        return """\
+    def _get_info_query(cls, conn: "BaseConnection[Any]") -> Query:
+        from .sql import SQL
+
+        return SQL(
+            """\
 SELECT name, oid, array_oid, array_agg(label) AS labels
 FROM (
     SELECT
@@ -323,11 +361,12 @@ FROM (
     FROM pg_type t
     LEFT JOIN  pg_enum e
     ON e.enumtypid = t.oid
-    WHERE t.oid = %(name)s::regtype
+    WHERE t.oid = {regtype}
     ORDER BY e.enumsortorder
 ) x
 GROUP BY name, oid, array_oid
 """
+        ).format(regtype=cls._to_regtype(conn))
 
 
 class TypesRegistry:

@@ -1,4 +1,8 @@
 version=4
-opts="mode=git, gitmode=full, pgpmode=gittag, uversionmangle=s/.dev/~/;s/.alpha/~alpha/;s/.beta/~beta/;s/.rc/~rc/;s/([0-9])([ab][0-9]*)/$1~$2/g" \
- https://github.com/psycopg/@PACKAGE@.git refs/tags/@ANY_VERSION@ \
+opts="mode=git, \
+      compression=xz, \
+      gitmode=full, \
+	  pgpmode=gittag, \
+	  uversionmangle=s/.dev/~/;s/.alpha/~alpha/;s/.beta/~beta/;s/.rc/~rc/;s/([0-9])([ab][0-9]*)/$1~$2/g" \
+https://github.com/psycopg/@PACKAGE@.git refs/tags/@ANY_VERSION@ \
  debian uupdate

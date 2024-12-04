@@ -6,6 +6,7 @@ from typing import List
 import psycopg
 from psycopg import sql, rows
 from psycopg.adapt import PyFormat
+from psycopg.types import TypeInfo
 
 from .utils import alist, gc_collect, gc_count
 from .test_cursor import my_row_factory
@@ -13,7 +14,7 @@ from .test_cursor import execmany, _execmany  # noqa: F401
 from .fix_crdb import crdb_encoding
 
 execmany = execmany  # avoid F811 underneath
-pytestmark = pytest.mark.asyncio
+pytestmark = pytest.mark.anyio
 
 
 @pytest.fixture
@@ -316,9 +317,10 @@ async def test_executemany_returning(aconn, execmany):
         [(10, "hello"), (20, "world")],
         returning=True,
     )
-    assert cur.rowcount == 2
+    assert cur.rowcount == 1
     assert (await cur.fetchone()) == (10,)
     assert cur.nextset()
+    assert cur.rowcount == 1
     assert (await cur.fetchone()) == (20,)
     assert cur.nextset() is None
 
@@ -342,12 +344,13 @@ async def test_executemany_no_result(aconn, execmany):
         [(10, "hello"), (20, "world")],
         returning=True,
     )
-    assert cur.rowcount == 2
+    assert cur.rowcount == 1
     assert cur.statusmessage.startswith("INSERT")
     with pytest.raises(psycopg.ProgrammingError):
         await cur.fetchone()
     pgresult = cur.pgresult
     assert cur.nextset()
+    assert cur.rowcount == 1
     assert cur.statusmessage.startswith("INSERT")
     assert pgresult is not cur.pgresult
     assert cur.nextset() is None
@@ -725,3 +728,8 @@ async def test_message_0x33(aconn):
         assert (await cur.fetchone()) == ("test",)
 
     assert not notices
+
+
+async def test_typeinfo(aconn):
+    info = await TypeInfo.fetch(aconn, "jsonb")
+    assert info is not None

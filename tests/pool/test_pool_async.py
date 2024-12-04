@@ -15,7 +15,7 @@ except ImportError:
     # Tests should have been skipped if the package is not available
     pass
 
-pytestmark = [pytest.mark.asyncio]
+pytestmark = [pytest.mark.anyio]
 
 
 async def test_defaults(dsn):
@@ -766,7 +766,6 @@ async def test_grow(dsn, monkeypatch, min_size, want_times):
 @pytest.mark.slow
 @pytest.mark.timing
 async def test_shrink(dsn, monkeypatch):
-
     from psycopg_pool.pool_async import ShrinkPool
 
     results: List[Tuple[int, int]] = []
@@ -797,6 +796,7 @@ async def test_shrink(dsn, monkeypatch):
 
 
 @pytest.mark.slow
+@pytest.mark.timing
 async def test_reconnect(proxy, caplog, monkeypatch):
     caplog.set_level(logging.WARNING, logger="psycopg.pool")
 
@@ -1048,6 +1048,19 @@ async def test_check_idle(dsn):
 
 
 @pytest.mark.slow
+async def test_check_max_lifetime(dsn):
+    async with pool.AsyncConnectionPool(dsn, min_size=1, max_lifetime=0.2) as p:
+        async with p.connection() as conn:
+            pid = conn.info.backend_pid
+        async with p.connection() as conn:
+            assert conn.info.backend_pid == pid
+        await asyncio.sleep(0.3)
+        await p.check()
+        async with p.connection() as conn:
+            assert conn.info.backend_pid != pid
+
+
+@pytest.mark.slow
 @pytest.mark.timing
 async def test_stats_measures(dsn):
     async def worker(n):
@@ -1175,6 +1188,64 @@ async def test_debug_deadlock(dsn):
     finally:
         logger.removeHandler(handler)
         logger.setLevel(old_level)
+
+
+@pytest.mark.skipif("sys.version_info < (3, 8)", reason="asyncio bug")
+async def test_cancellation_in_queue(dsn):
+    # https://github.com/psycopg/psycopg/issues/509
+
+    nconns = 3
+
+    async with pool.AsyncConnectionPool(dsn, min_size=nconns, timeout=1) as p:
+        await p.wait()
+
+        got_conns = []
+        ev = asyncio.Event()
+
+        async def worker(i):
+            try:
+                logging.info("worker %s started", i)
+                nonlocal got_conns
+
+                async with p.connection() as conn:
+                    logging.info("worker %s got conn", i)
+                    cur = await conn.execute("select 1")
+                    assert (await cur.fetchone()) == (1,)
+
+                    got_conns.append(conn)
+                    if len(got_conns) >= nconns:
+                        ev.set()
+
+                    await asyncio.sleep(5)
+
+            except BaseException as ex:
+                logging.info("worker %s stopped: %r", i, ex)
+                raise
+
+        # Start tasks taking up all the connections and getting in the queue
+        tasks = [asyncio.ensure_future(worker(i)) for i in range(nconns * 3)]
+
+        # wait until the pool has served all the connections and clients are queued.
+        await asyncio.wait_for(ev.wait(), 3.0)
+        for i in range(10):
+            if p.get_stats().get("requests_queued", 0):
+                break
+            else:
+                await asyncio.sleep(0.1)
+        else:
+            pytest.fail("no client got in the queue")
+
+        [task.cancel() for task in reversed(tasks)]
+        # Python 3.7 hangs on this statement, instead of timing out or returning
+        await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), 1.0)
+
+        stats = p.get_stats()
+        assert stats["pool_available"] == 3
+        assert stats.get("requests_waiting", 0) == 0
+
+        async with p.connection() as conn:
+            cur = await conn.execute("select 1")
+            assert await cur.fetchone() == (1,)
 
 
 def delay_connection(monkeypatch, sec):
