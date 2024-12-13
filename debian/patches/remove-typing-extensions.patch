@@ -1,0 +1,206 @@
+--- a/psycopg/psycopg/_compat.py
++++ b/psycopg/psycopg/_compat.py
+@@ -11,7 +11,7 @@
+ # NOTE: TypeAlias cannot be exported by this module, as pyright special-cases it.
+ # For this raisin it must be imported directly from typing_extension where used.
+ # See https://github.com/microsoft/pyright/issues/4197
+-from typing_extensions import TypeAlias
++from typing import TypeAlias
+ 
+ if sys.version_info >= (3, 8):
+     from typing import Protocol
+--- a/psycopg/psycopg/_pipeline.py
++++ b/psycopg/psycopg/_pipeline.py
+@@ -7,7 +7,7 @@
+ import logging
+ from types import TracebackType
+ from typing import Any, List, Optional, Union, Tuple, Type, TypeVar, TYPE_CHECKING
+-from typing_extensions import TypeAlias
++from typing import TypeAlias
+ 
+ from . import pq
+ from . import errors as e
+--- a/psycopg/psycopg/_preparing.py
++++ b/psycopg/psycopg/_preparing.py
+@@ -7,7 +7,7 @@
+ from enum import IntEnum, auto
+ from typing import Iterator, Optional, Sequence, Tuple, TYPE_CHECKING
+ from collections import OrderedDict
+-from typing_extensions import TypeAlias
++from typing import TypeAlias
+ 
+ from . import pq
+ from ._compat import Deque
+--- a/psycopg/psycopg/_struct.py
++++ b/psycopg/psycopg/_struct.py
+@@ -6,7 +6,7 @@
+ 
+ import struct
+ from typing import Callable, cast, Optional, Tuple
+-from typing_extensions import TypeAlias
++from typing import TypeAlias
+ 
+ from .abc import Buffer
+ from . import errors as e
+--- a/psycopg/psycopg/_transform.py
++++ b/psycopg/psycopg/_transform.py
+@@ -7,7 +7,7 @@
+ from typing import Any, Dict, List, Optional, Sequence, Tuple
+ from typing import DefaultDict, TYPE_CHECKING
+ from collections import defaultdict
+-from typing_extensions import TypeAlias
++from typing import TypeAlias
+ 
+ from . import pq
+ from . import postgres
+--- a/psycopg/psycopg/_typeinfo.py
++++ b/psycopg/psycopg/_typeinfo.py
+@@ -9,7 +9,7 @@
+ from enum import Enum
+ from typing import Any, Dict, Iterator, Optional, overload
+ from typing import Sequence, Tuple, Type, TypeVar, Union, TYPE_CHECKING
+-from typing_extensions import TypeAlias
++from typing import TypeAlias
+ 
+ from . import errors as e
+ from .abc import AdaptContext, Query
+--- a/psycopg/psycopg/abc.py
++++ b/psycopg/psycopg/abc.py
+@@ -7,7 +7,7 @@
+ from typing import Any, Callable, Generator, Mapping
+ from typing import List, Optional, Sequence, Tuple, TypeVar, Union
+ from typing import TYPE_CHECKING
+-from typing_extensions import TypeAlias
++from typing import TypeAlias
+ 
+ from . import pq
+ from ._enums import PyFormat as PyFormat
+--- a/psycopg/psycopg/connection.py
++++ b/psycopg/psycopg/connection.py
+@@ -14,7 +14,7 @@
+ from warnings import warn
+ from functools import partial
+ from contextlib import contextmanager
+-from typing_extensions import TypeAlias
++from typing import TypeAlias
+ 
+ from . import pq
+ from . import errors as e
+--- a/psycopg/psycopg/errors.py
++++ b/psycopg/psycopg/errors.py
+@@ -21,7 +21,7 @@
+ from dataclasses import dataclass, field, fields
+ from typing import Any, Callable, Dict, List, NoReturn, Optional, Sequence, Tuple, Type
+ from typing import Union, TYPE_CHECKING
+-from typing_extensions import TypeAlias
++from typing import TypeAlias
+ from asyncio import CancelledError
+ 
+ from .pq.abc import PGconn, PGresult
+--- a/psycopg/psycopg/pq/abc.py
++++ b/psycopg/psycopg/pq/abc.py
+@@ -6,7 +6,7 @@
+ 
+ from typing import Any, Callable, List, Optional, Sequence, Tuple
+ from typing import Union, TYPE_CHECKING
+-from typing_extensions import TypeAlias
++from typing import TypeAlias
+ 
+ from ._enums import Format, Trace
+ from .._compat import Protocol
+--- a/psycopg/psycopg/rows.py
++++ b/psycopg/psycopg/rows.py
+@@ -8,7 +8,7 @@
+ from typing import Any, Callable, Dict, List, Optional, NamedTuple, NoReturn
+ from typing import TYPE_CHECKING, Sequence, Tuple, Type, TypeVar
+ from collections import namedtuple
+-from typing_extensions import TypeAlias
++from typing import TypeAlias
+ 
+ from . import pq
+ from . import errors as e
+--- a/psycopg/psycopg/types/enum.py
++++ b/psycopg/psycopg/types/enum.py
+@@ -4,7 +4,7 @@
+ from enum import Enum
+ from typing import Any, Dict, Generic, Optional, Mapping, Sequence
+ from typing import Tuple, Type, TypeVar, Union, cast
+-from typing_extensions import TypeAlias
++from typing import TypeAlias
+ 
+ from .. import postgres
+ from .. import errors as e
+--- a/psycopg/psycopg/types/hstore.py
++++ b/psycopg/psycopg/types/hstore.py
+@@ -6,7 +6,7 @@
+ 
+ import re
+ from typing import Dict, List, Optional
+-from typing_extensions import TypeAlias
++from typing import TypeAlias
+ 
+ from .. import errors as e
+ from .. import postgres
+--- a/psycopg/psycopg/types/net.py
++++ b/psycopg/psycopg/types/net.py
+@@ -5,7 +5,7 @@
+ # Copyright (C) 2020 The Psycopg Team
+ 
+ from typing import Callable, Optional, Type, Union, TYPE_CHECKING
+-from typing_extensions import TypeAlias
++from typing import TypeAlias
+ 
+ from .. import postgres
+ from ..pq import Format
+--- a/psycopg_pool/psycopg_pool/_compat.py
++++ b/psycopg_pool/psycopg_pool/_compat.py
+@@ -7,7 +7,7 @@
+ import sys
+ import asyncio
+ from typing import Any, Awaitable, Generator, Optional, Union, Type, TypeVar
+-from typing_extensions import TypeAlias
++from typing import TypeAlias
+ 
+ import psycopg.errors as e
+ 
+--- a/tools/update_oids.py
++++ b/tools/update_oids.py
+@@ -19,7 +19,7 @@
+ import subprocess as sp
+ from typing import List
+ from pathlib import Path
+-from typing_extensions import TypeAlias
++from typing import TypeAlias
+ 
+ import psycopg
+ from psycopg.rows import TupleRow
+--- a/tests/constraints.txt
++++ b/tests/constraints.txt
+@@ -5,7 +5,6 @@
+ 
+ # From install_requires
+ backports.zoneinfo == 0.2.0
+-typing-extensions == 4.1.0
+ importlib-metadata == 1.4
+ 
+ # From the 'test' extra
+--- a/psycopg_pool/setup.cfg
++++ b/psycopg_pool/setup.cfg
+@@ -42,7 +42,6 @@
+ packages = find:
+ zip_safe = False
+ install_requires =
+-    typing-extensions >= 3.10
+ 
+ [options.package_data]
+ psycopg_pool = py.typed
+--- a/psycopg/setup.cfg
++++ b/psycopg/setup.cfg
+@@ -43,7 +43,6 @@
+ zip_safe = False
+ install_requires =
+     backports.zoneinfo >= 0.2.0; python_version < "3.9"
+-    typing-extensions >= 4.1
+     tzdata; sys_platform == "win32"
+ 
+ [options.package_data]

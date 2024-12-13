@@ -12,7 +12,6 @@ Build-Depends:
  python3-all:any,
  python3-setuptools,
  pybuild-plugin-pyproject,
- python3-typing-extensions,
  python3-pytest <!nocheck>,
  python3-dnspython <!nocheck>,
  python3-shapely <!nocheck>,

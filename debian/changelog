@@ -1,3 +1,9 @@
+psycopg3 (3.1.10-1+pexip24u2) pexip; urgency=medium
+
+  * Remove dep on typing_extensions
+
+ -- Huw Jones <huw@pexip.com>  Fri, 13 Dec 2024 07:48:40 +0000
+
 psycopg3 (3.1.10-1+pexip24u1) pexip; urgency=medium
 
   * Update to 3.1.10-1
