@@ -5,19 +5,19 @@
 
 # From install_requires
 backports.zoneinfo == 0.2.0
-typing-extensions == 4.1.0
+typing-extensions == 4.6.0
 importlib-metadata == 1.4
 
 # From the 'test' extra
-anyio == 3.6.2
-mypy == 1.4.1
+anyio == 4.0
+mypy == 1.14.0
 pproxy == 2.7.0
 pytest == 6.2.5
 pytest-cov == 3.0.0
 pytest-randomly == 3.5.0
 
 # From the 'dev' extra
-black == 23.1.0
+black == 24.1.0
 dnspython == 2.1.0
 flake8 == 4.0.0
 types-setuptools == 57.4.0
@@ -36,4 +36,8 @@ Cython == 3.0.0
 tomli == 2.0.1
 
 # Undeclared extras to "unblock" extra features
+
 shapely == 1.7.0
+# Warning: binary package only available up to python <= 3.8.
+# Bump to a higher version when min supported python version increases past it.
+numpy == 1.18.0

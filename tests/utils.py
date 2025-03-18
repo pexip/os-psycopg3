@@ -1,8 +1,29 @@
-import gc
+from __future__ import annotations
+
 import re
 import sys
 import operator
-from typing import Callable, Optional, Tuple
+from typing import Callable
+from contextlib import contextmanager
+
+if sys.version_info >= (3, 9):
+    import collections
+
+    Counter = collections.Counter
+else:
+    import typing
+
+    Counter = typing.Counter
+
+if sys.version_info >= (3, 11):
+    import typing
+
+    assert_type = typing.assert_type
+else:
+    import typing_extensions
+
+    assert_type = typing_extensions.assert_type
+
 
 import pytest
 
@@ -50,8 +71,8 @@ class VersionCheck:
         self,
         *,
         skip: bool = False,
-        op: Optional[str] = None,
-        version_tuple: Tuple[int, ...] = (),
+        op: str | None = None,
+        version_tuple: tuple[int, ...] = (),
         whose: str = "(wanted)",
         postgres_rule: bool = False,
     ):
@@ -63,7 +84,7 @@ class VersionCheck:
         self.postgres_rule = postgres_rule
 
     @classmethod
-    def parse(cls, spec: str, *, postgres_rule: bool = False) -> "VersionCheck":
+    def parse(cls, spec: str, *, postgres_rule: bool = False) -> VersionCheck:
         # Parse a spec like "> 9.6", "skip < 21.2.0"
         m = re.match(
             r"""(?ix)
@@ -85,10 +106,10 @@ class VersionCheck:
             skip=skip, op=op, version_tuple=version_tuple, postgres_rule=postgres_rule
         )
 
-    def get_skip_message(self, version: Optional[int]) -> Optional[str]:
+    def get_skip_message(self, version: int | None) -> str | None:
         got_tuple = self._parse_int_version(version)
 
-        msg: Optional[str] = None
+        msg: str | None = None
         if self.skip:
             if got_tuple:
                 if not self.version_tuple:
@@ -114,7 +135,7 @@ class VersionCheck:
 
     _OP_NAMES = {">=": "ge", "<=": "le", ">": "gt", "<": "lt", "==": "eq", "!=": "ne"}
 
-    def _match_version(self, got_tuple: Tuple[int, ...]) -> bool:
+    def _match_version(self, got_tuple: tuple[int, ...]) -> bool:
         if not self.version_tuple:
             return True
 
@@ -123,11 +144,11 @@ class VersionCheck:
             assert len(version_tuple) <= 2
             version_tuple = version_tuple[:1] + (0,) + version_tuple[1:]
 
-        op: Callable[[Tuple[int, ...], Tuple[int, ...]], bool]
+        op: Callable[[tuple[int, ...], tuple[int, ...]], bool]
         op = getattr(operator, self._OP_NAMES[self.op])
         return op(got_tuple, version_tuple)
 
-    def _parse_int_version(self, version: Optional[int]) -> Tuple[int, ...]:
+    def _parse_int_version(self, version: int | None) -> tuple[int, ...]:
         if version is None:
             return ()
         version, ver_fix = divmod(version, 100)
@@ -135,45 +156,36 @@ class VersionCheck:
         return (ver_maj, ver_min, ver_fix)
 
 
-def gc_collect():
+@contextmanager
+def raiseif(cond, *args, **kwargs):
     """
-    gc.collect(), but more insisting.
+    Context behaving like `pytest.raises` if cond is true, else no-op.
+
+    Return None if no error was thrown (i.e. condition is false), else
+    return what `pytest.raises` returns.
     """
-    for i in range(3):
-        gc.collect()
+    if not cond:
+        yield
+        return
 
-
-NO_COUNT_TYPES: Tuple[type, ...] = ()
-
-if sys.version_info[:2] == (3, 10):
-    # On my laptop there are occasional creations of a single one of these objects
-    # with empty content, which might be some Decimal caching.
-    # Keeping the guard as strict as possible, to be extended if other types
-    # or versions are necessary.
-    try:
-        from _contextvars import Context  # type: ignore
-    except ImportError:
-        pass
     else:
-        NO_COUNT_TYPES += (Context,)
+        with pytest.raises(*args, **kwargs) as ex:
+            yield ex
+        return
 
 
-def gc_count() -> int:
+def set_autocommit(conn, value):
     """
-    len(gc.get_objects()), with subtleties.
+    Set autocommit on a connection.
+
+    Give an uniform interface to both sync and async connection for psycopg
+    < 3.2, in order to run psycopg_pool 3.2 tests using psycopg 3.1.
     """
-    if not NO_COUNT_TYPES:
-        return len(gc.get_objects())
+    import psycopg
 
-    # Note: not using a list comprehension because it pollutes the objects list.
-    rv = 0
-    for obj in gc.get_objects():
-        if isinstance(obj, NO_COUNT_TYPES):
-            continue
-        rv += 1
-
-    return rv
-
-
-async def alist(it):
-    return [i async for i in it]
+    if isinstance(conn, psycopg.Connection):
+        conn.autocommit = value
+    elif isinstance(conn, psycopg.AsyncConnection):
+        return conn.set_autocommit(value)
+    else:
+        raise TypeError(f"not a connection: {conn}")

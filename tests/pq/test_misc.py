@@ -12,12 +12,8 @@ def test_error_message(pgconn):
     assert msg == pq.error_message(res)
     primary = res.error_field(pq.DiagnosticField.MESSAGE_PRIMARY)
     assert primary.decode("ascii") in msg
-
-    with pytest.raises(TypeError):
-        pq.error_message(None)  # type: ignore[arg-type]
-
     res.clear()
-    assert pq.error_message(res) == "no details available"
+    assert pq.error_message(res) == "no error details available"
     pgconn.finish()
     assert "NULL" in pq.error_message(pgconn)
 
@@ -81,3 +77,11 @@ def test_result_set_attrs(pgconn):
 
     with pytest.raises(psycopg.OperationalError):
         res.set_attributes(attrs)
+
+
+@pytest.mark.parametrize(
+    "intv, strv",
+    [(91020, "9.10.20"), (100004, "10.4"), (101112, "10.11.12")],
+)
+def test_version_pretty(intv, strv):
+    assert pq.version_pretty(intv) == strv

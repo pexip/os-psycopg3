@@ -1,52 +1,56 @@
-Description: Ensure reproducible documentation
- Do not fetch external Sphinx inverntory but use one from Debian packages.
+From: Tomasz Rybak <serpent@debian.org>
+Date: Tue, 24 Sep 2024 21:12:38 +0200
+Subject: Ensure reproducible documentation
+
 Forwarded: not-needed
-Author: Tomasz Rybak <serpent@debian.org>
-Last-Update: 2022-12-28
-Index: psycopg3/docs/conf.py
+Last-Update: 2024-12-20
+
+Do not fetch external Sphinx inventory but use one from Debian packages.
 ===================================================================
---- psycopg3.orig/docs/conf.py
-+++ psycopg3/docs/conf.py
-@@ -96,8 +96,10 @@ html_static_path = ["_static"]
+---
+ docs/conf.py           | 9 ++++++---
+ docs/lib/libpq_docs.py | 4 +++-
+ 2 files changed, 9 insertions(+), 4 deletions(-)
+
+diff --git a/docs/conf.py b/docs/conf.py
+index cac9736..af8ab0a 100644
+--- a/docs/conf.py
++++ b/docs/conf.py
+@@ -98,9 +98,12 @@ html_static_path = ["_static"]
  default_role = "obj"
  
  intersphinx_mapping = {
 -    "py": ("https://docs.python.org/3", None),
 -    "pg2": ("https://www.psycopg.org/docs/", None),
+-    "numpy": ("https://numpy.org/doc/stable/", None),
 +    "py": ("file:///usr/share/doc/python3-doc/html/",
 +        "/usr/share/doc/python3-doc/html/objects.inv"),
 +    "pg2": ("file:///usr/share/doc/python-psycopg2-doc/html/",
 +        "/usr/share/doc/python-psycopg2-doc/html/objects.inv"),
++    "numpy": ("file:///usr/share/doc/python-numpy/html/",
++        "/usr/share/doc/python-numpy/html/objects.inv"),
  }
  
  autodoc_member_order = "bysource"
- 
- # PostgreSQL docs version to link libpq functions to
--libpq_docs_version = "14"
-+libpq_docs_version = "15"
- 
- # Where to point on :ticket: role
- ticket_url = "https://github.com/psycopg/psycopg/issues/%s"
-Index: psycopg3/docs/lib/libpq_docs.py
-===================================================================
---- psycopg3.orig/docs/lib/libpq_docs.py
-+++ psycopg3/docs/lib/libpq_docs.py
-@@ -7,6 +7,8 @@ Add the ``:pq:`` role, to create a link
+diff --git a/docs/lib/libpq_docs.py b/docs/lib/libpq_docs.py
+index a5488d1..f105089 100644
+--- a/docs/lib/libpq_docs.py
++++ b/docs/lib/libpq_docs.py
+@@ -8,6 +8,8 @@ Add the ``:pq:`` role, to create a link to a libpq function, e.g. ::
  
  will link to::
  
-+    file:///usr/share/doc/postgresql-doc-13/html/libpq-misc.html #LIBPQ-PQLIBVERSION
++    file:///usr/share/doc/postgresql-doc-16/html/libpq-misc.html #LIBPQ-PQLIBVERSION
 +previously to:
      https://www.postgresql.org/docs/current/libpq-misc.html #LIBPQ-PQLIBVERSION
  
  """
-@@ -89,8 +91,7 @@ class LibpqReader:
-     app = None
+@@ -82,7 +84,7 @@ class LibpqParser(HTMLParser):
+             func_id=self.varlist_id.upper(),
+         )
  
-     _url_pattern = (
--        "https://raw.githubusercontent.com/postgres/postgres/REL_{ver}_STABLE"
--        "/doc/src/sgml/libpq.sgml"
-+        "file:///usr/share/doc/postgresql-doc-{version}/html/{section}.html#{func_id}"
-     )
+-    _url_pattern = "https://www.postgresql.org/docs/{version}/{section}.html#{func_id}"
++    _url_pattern = "file:///usr/share/doc/postgresql-doc-{version}/html/{section}.html#{func_id}"
  
-     data = None
+ 
+ class LibpqReader:

@@ -1,0 +1,64 @@
+From: Colin Watson <cjwatson@debian.org>
+Date: Tue, 12 Nov 2024 19:21:52 +0000
+Subject: test(numpy): fix integer type handling harder
+
+https://numpy.org/devdocs/release/1.18.0-notes.html#different-c-numeric-types-of-the-same-size-have-unique-names
+indicates that we can't just compare class identity even if the classes
+refer to a data type with the same signedness and bit length.
+
+According to
+https://numpy.org/devdocs/user/basics.types.html#relationship-between-numpy-data-types-and-c-data-types,
+`intc` and `uintc` are always 32-bit.
+https://numpy.org/devdocs/reference/arrays.scalars.html#numpy.int_ and
+https://numpy.org/devdocs/reference/arrays.scalars.html#numpy.uint
+indicate that `int_` and `uint` are 32-bit or 64-bit depending on the
+platform.
+
+Forwarded: https://github.com/psycopg/psycopg/pull/953
+Last-Update: 2024-11-13
+---
+ tests/types/test_numpy.py | 24 +++++++++++++-----------
+ 1 file changed, 13 insertions(+), 11 deletions(-)
+
+diff --git a/tests/types/test_numpy.py b/tests/types/test_numpy.py
+index f42e7e0..73c42b5 100644
+--- a/tests/types/test_numpy.py
++++ b/tests/types/test_numpy.py
+@@ -29,24 +29,26 @@ def _get_arch_size() -> int:
+     return psize
+ 
+ 
+-def test_classes_identities():
+-    # Check if we know the class identities correctly. Maybe on different
++def test_integer_types():
++    # Check if we know the integer types correctly. Maybe on different
+     # platforms they are different.
+     size = _get_arch_size()
+ 
+-    assert np.byte is np.int8
+-    assert np.ubyte is np.uint8
++    assert np.byte(0).dtype == np.int8(0).dtype
++    assert np.ubyte(0).dtype == np.uint8(0).dtype
+ 
+-    assert np.short is np.int16
+-    assert np.ushort is np.uint16
++    assert np.short(0).dtype == np.int16(0).dtype
++    assert np.ushort(0).dtype == np.uint16(0).dtype
++
++    assert np.uintc(0).dtype == np.uint32(0).dtype
++    assert np.intc(0).dtype == np.int32(0).dtype
+ 
+     if size == 32:
+-        assert np.uint is np.uint32
+-        assert np.uintc is np.uint32
+-        assert np.intc is np.int32
++        assert np.uint(0).dtype == np.uint32(0).dtype
++        assert np.int_(0).dtype == np.int32(0).dtype
+     else:
+-        assert np.uint is np.uint64
+-        assert np.int_ is np.int64
++        assert np.uint(0).dtype == np.uint64(0).dtype
++        assert np.int_(0).dtype == np.int64(0).dtype
+ 
+ 
+ @pytest.mark.parametrize(

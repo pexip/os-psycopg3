@@ -26,25 +26,39 @@ jobs:
       matrix:
         include:
           # Test different combinations of Python, Postgres, libpq.
-          - {impl: python, python: "3.7", postgres: "postgres:10", libpq: newest}
-          - {impl: python, python: "3.8", postgres: "postgres:11"}
-          - {impl: python, python: "3.9", postgres: "postgres:12"}
-          - {impl: python, python: "3.10", postgres: "postgres:13"}
+          - {impl: python, python: "3.8", postgres: "postgres:17", libpq: oldest}
+          - {impl: python, python: "3.9", postgres: "postgres:16", libpq: master}
+          - {impl: python, python: "3.10", postgres: "postgres:15"}
           - {impl: python, python: "3.11", postgres: "postgres:14"}
-          - {impl: python, python: "3.12.0-beta.4 - 3.12", postgres: "postgres:15", libpq: oldest}
+          - {impl: python, python: "3.12", postgres: "postgres:13", libpq: newest}
+          - {impl: python, python: "3.13", postgres: "postgres:12"}
 
-          - {impl: c, python: "3.7", postgres: "postgres:15", libpq: newest}
-          - {impl: c, python: "3.8", postgres: "postgres:13"}
-          - {impl: c, python: "3.9", postgres: "postgres:14"}
-          - {impl: c, python: "3.10", postgres: "postgres:12"}
-          - {impl: c, python: "3.11", postgres: "postgres:11", libpq: oldest}
-          - {impl: c, python: "3.12.0-beta.4 - 3.12", postgres: "postgres:10", libpq: newest}
+          - {impl: c, python: "3.8", postgres: "postgres:12", libpq: master}
+          - {impl: c, python: "3.9", postgres: "postgres:13"}
+          - {impl: c, python: "3.10", postgres: "postgres:14"}
+          - {impl: c, python: "3.11", postgres: "postgres:15", libpq: oldest}
+          - {impl: c, python: "3.12", postgres: "postgres:16", libpq: newest}
+          - {impl: c, python: "3.13", postgres: "postgres:17"}
 
+          - {impl: python, python: "3.8", ext: gevent, postgres: "postgres:17"}
+          - {impl: c, python: "3.12", ext: gevent, postgres: "postgres:14"}
           - {impl: python, python: "3.9", ext: dns, postgres: "postgres:14"}
           - {impl: python, python: "3.9", ext: postgis, postgres: "postgis/postgis"}
+          - {impl: python, python: "3.10", ext: numpy, postgres: "postgres:14"}
+          - {impl: c, python: "3.11", ext: numpy, postgres: "postgres:15"}
 
           # Test with minimum dependencies versions
-          - {impl: c, python: "3.7", ext: min, postgres: "postgres:15"}
+          # WARNING: when bumping min version, make sure that the dependencies
+          # # in tests/constraints.txt are updated and that binary packages
+          # are available for such version.
+          - {impl: c, python: "3.8", ext: min, postgres: "postgres:15"}
+
+          # Test memory alignment
+          - {impl: c, python: "3.12", ext: align, postgres: "postgres:16"}
+
+          # Test with PyPy.
+          - {impl: python, python: "pypy3.9", postgres: "postgres:13"}
+          - {impl: python, python: "pypy3.10", postgres: "postgres:14"}
 
     env:
       PSYCOPG_IMPL: ${{ matrix.impl }}
@@ -53,11 +67,12 @@ jobs:
       MARKERS: ""
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+          allow-prereleases: true
 
       - name: Start PostgreSQL service
         # Note: this would love to be a service, but I don't see a way to pass
@@ -76,6 +91,12 @@ jobs:
         run: |
           echo "DEPS=$DEPS ./psycopg_c" >> $GITHUB_ENV
 
+      - name: Include gevent to the packages to install
+        if: ${{ matrix.ext == 'gevent' }}
+        run: |
+          echo "DEPS=$DEPS gevent" >> $GITHUB_ENV
+          echo "MARKERS=$MARKERS gevent" >> $GITHUB_ENV
+
       - name: Include dnspython to the packages to install
         if: ${{ matrix.ext == 'dns' }}
         run: |
@@ -88,12 +109,30 @@ jobs:
           echo "DEPS=$DEPS shapely" >> $GITHUB_ENV
           echo "MARKERS=$MARKERS postgis" >> $GITHUB_ENV
 
+      - if: ${{ matrix.ext == 'numpy' }}
+        run: |
+          echo "DEPS=$DEPS numpy" >> $GITHUB_ENV
+          echo "MARKERS=$MARKERS numpy" >> $GITHUB_ENV
+
+      - name: Exclude certain tests from pypy
+        if: ${{ startsWith(matrix.python, 'pypy') }}
+        run: |
+          echo "NOT_MARKERS=$NOT_MARKERS timing" >> $GITHUB_ENV
+
       - name: Configure to use the oldest dependencies
         if: ${{ matrix.ext == 'min' }}
         run: |
-          echo "DEPS=$DEPS dnspython shapely" >> $GITHUB_ENV
+          echo "DEPS=$DEPS dnspython shapely numpy gevent" >> $GITHUB_ENV
           echo "PIP_CONSTRAINT=${{ github.workspace }}/tests/constraints.txt" \
             >> $GITHUB_ENV
+
+      - name: Configure memory alignment tests
+        if: ${{ matrix.ext == 'align' }}
+        run: |
+          echo "CFLAGS=-fsanitize=undefined -Werror=strict-aliasing -Werror=odr -Werror=lto-type-mismatch"
+            >> $GITHUB_ENV
+          echo "UBSAN_OPTIONS=halt_on_error=1" >> $GITHUB_ENV
+          echo "PYTEST_ADDOPTS=-v" >> $GITHUB_ENV
 
       - name: Install Python packages
         run: pip install $DEPS
@@ -104,24 +143,22 @@ jobs:
 
   # }}}
 
-  macos:  # {{{
-    runs-on: macos-latest
+  macos-14:  # {{{
+    runs-on: macos-14
     if: true
 
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {impl: python, python: "3.7"}
-          - {impl: python, python: "3.8"}
-          - {impl: python, python: "3.9"}
           - {impl: python, python: "3.10"}
           - {impl: python, python: "3.11"}
-          - {impl: c, python: "3.7"}
-          - {impl: c, python: "3.8"}
-          - {impl: c, python: "3.9"}
+          - {impl: python, python: "3.12"}
+          - {impl: python, python: "3.13"}
           - {impl: c, python: "3.10"}
           - {impl: c, python: "3.11"}
+          - {impl: c, python: "3.12"}
+          - {impl: c, python: "3.13"}
 
     env:
       PSYCOPG_IMPL: ${{ matrix.impl }}
@@ -131,24 +168,101 @@ jobs:
       # Don't run timing-based tests as they regularly fail.
       # pproxy-based tests fail too, with the proxy not coming up in 2s.
       NOT_MARKERS: "timing proxy mypy"
+      PG_VERSION: "17"
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+          allow-prereleases: true
 
       - name: Install PostgreSQL on the runner
-        run: brew install postgresql@14
+        # On 2024-09-28 postgresql@17 installation failed but the package is
+        # available. So, in a few days, we might be able to drop "brew update".
+        run: |
+          brew update
+          brew install postgresql@${PG_VERSION}
 
       - name: Start PostgreSQL service
-        run: brew services start postgresql
+        run: brew services start postgresql@${PG_VERSION}
+
+      - name: Find the libpq
+        if: ${{ matrix.impl == 'python' }}
+        # NOTE: the libpq was found in:
+        # /opt/homebrew/opt/postgresql@${PG_VERSION}/lib before PG 17
+        # /opt/homebrew/opt/postgresql@${PG_VERSION}/lib/postgresql on PG 17
+        run: |
+          echo "DYLD_LIBRARY_PATH=/opt/homebrew/opt/postgresql@${PG_VERSION}/lib/postgresql:/opt/homebrew/opt/postgresql@${PG_VERSION}/lib:$DYLD_LIBRARY_PATH" \
+              >> $GITHUB_ENV
 
       - name: Include psycopg-c to the packages to install
         if: ${{ matrix.impl == 'c' }}
         run: |
           echo "DEPS=$DEPS ./psycopg_c" >> $GITHUB_ENV
+          echo "PATH=/opt/homebrew/opt/postgresql@${PG_VERSION}/bin:$PATH" >> $GITHUB_ENV
+
+      - name: Install Python packages
+        run: pip install $DEPS
+
+      - name: Run tests
+        run: ./tools/build/ci_test.sh
+
+
+  # }}}
+
+  macos-13:  # {{{
+    runs-on: macos-13
+    if: true
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {impl: python, python: "3.8"}
+          - {impl: python, python: "3.9"}
+          - {impl: c, python: "3.8"}
+          - {impl: c, python: "3.9"}
+
+    env:
+      PSYCOPG_IMPL: ${{ matrix.impl }}
+      DEPS: ./psycopg[test] ./psycopg_pool
+      PSYCOPG_TEST_DSN: "host=127.0.0.1 user=runner dbname=postgres"
+      # MacOS on GitHub Actions seems particularly slow.
+      # Don't run timing-based tests as they regularly fail.
+      # pproxy-based tests fail too, with the proxy not coming up in 2s.
+      NOT_MARKERS: "timing proxy mypy"
+      PG_VERSION: "17"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install PostgreSQL on the runner
+        # On 2024-09-28 postgresql@17 installation failed but the package is
+        # available. So, in a few days, we might be able to drop "brew update".
+        run: |
+          brew update
+          brew install gnu-sed postgresql@${PG_VERSION}
+
+      - name: Start PostgreSQL service
+        run: brew services start postgresql@${PG_VERSION}
+
+      - name: Find the libpq
+        if: ${{ matrix.impl == 'python' }}
+        run: |
+          echo "DYLD_LIBRARY_PATH=/usr/local/opt/postgresql@${PG_VERSION}/lib/postgresql:$DYLD_LIBRARY_PATH" \
+              >> $GITHUB_ENV
+
+      - name: Include psycopg-c to the packages to install
+        if: ${{ matrix.impl == 'c' }}
+        run: |
+          echo "DEPS=$DEPS ./psycopg_c" >> $GITHUB_ENV
+          echo "PATH=/usr/local/opt/postgresql@${PG_VERSION}/bin:$PATH" >> $GITHUB_ENV
 
       - name: Install Python packages
         run: pip install $DEPS
@@ -167,16 +281,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {impl: python, python: "3.7"}
           - {impl: python, python: "3.8"}
           - {impl: python, python: "3.9"}
           - {impl: python, python: "3.10"}
           - {impl: python, python: "3.11"}
-          - {impl: c, python: "3.7"}
+          - {impl: python, python: "3.12"}
+          - {impl: python, python: "3.13"}
           - {impl: c, python: "3.8"}
           - {impl: c, python: "3.9"}
           - {impl: c, python: "3.10"}
           - {impl: c, python: "3.11"}
+          - {impl: c, python: "3.12"}
+          - {impl: c, python: "3.13"}
 
     env:
       PSYCOPG_IMPL: ${{ matrix.impl }}
@@ -190,34 +306,58 @@ jobs:
         shell: bash
 
     steps:
-      - uses: actions/checkout@v3
+      # there are some extra libpq.dll in PATH
+      - run: rm -rf c:/tools/php C:/Strawberry/c/bin
 
-      - uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+          allow-prereleases: true
 
       - name: Start PostgreSQL service
         run: |
           $PgSvc = Get-Service "postgresql*"
           Set-Service $PgSvc.Name -StartupType manual
           $PgSvc.Start()
-        shell: pwsh
+        shell: powershell
+
+      # Refcount tests are flakey on windows, often they fail with the likes of:
+      #
+      #   AssertionError: objects leaked: 0, -2
+      #
+      # Avoid the morning bother of a failed workflow.
+      - name: Exclude refcount tests in daily tests
+        if: ${{ github.event_name == 'schedule' }}
+        run: echo "NOT_MARKERS=$NOT_MARKERS refcount" >> $GITHUB_ENV
+
+      - name: Export GitHub Actions cache environment variables
+      # https://learn.microsoft.com/en-us/vcpkg/consume/binary-caching-github-actions-cache
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const path = require('path')
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+            core.addPath(path.join(process.env.VCPKG_INSTALLATION_ROOT, 'installed/x64-windows-release/lib'));
+            core.addPath(path.join(process.env.VCPKG_INSTALLATION_ROOT, 'installed/x64-windows-release/bin'));
+
+      - name: Install libpq from vcpkg and install pg_config.exe stub
+        run: .\tools\build\wheel_win32_before_build.bat
+        shell: powershell
+        env:
+          # cache vcpkg
+          VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
 
       - name: Build the C wheel
         if: ${{ matrix.impl == 'c' }}
         run: |
-          pip install delvewheel wheel
-
-          # The windows runner is a total mess, with random copies of the libpq
-          # scattered all over the places. Give precedence to the one under our
-          # control (or the illusion of it).
-          export PATH="/c/Program Files/PostgreSQL/14/bin/:$PATH"
-
           # If the wheel is not delocated, import fails with some dll not found
           # (but it won't tell which one).
           pip wheel -v -w ./psycopg_c/dist/ ./psycopg_c/
           delvewheel repair --no-mangle "libiconv-2.dll;libwinpthread-1.dll" \
-            -w ./wheelhouse/ psycopg_c/dist/*.whl
+            -w ./wheelhouse/ psycopg_c/dist/psycopg*.whl
           echo "DEPS=$DEPS $(ls ./wheelhouse/*.whl)" >> $GITHUB_ENV
 
       - name: Install Python packages
@@ -237,17 +377,32 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {impl: c, crdb: "latest-v22.1", python: "3.10", libpq: newest}
-          - {impl: python, crdb: "latest-v22.2", python: "3.11"}
+          # Releases: https://www.cockroachlabs.com/docs/releases/
+          # Images: https://console.cloud.google.com/artifacts/docker/cockroach-cloud-images/us/cockroachdb/cockroach
+          #
+          # Also useful:
+          #
+          #   curl -fsSL -X GET \
+          #   https://us-docker.pkg.dev/v2/cockroach-cloud-images/cockroachdb/cockroach/tags/list \
+          #   | jq .tags | egrep 'latest-[^-]+-build' | sort
+          - {impl: c, crdb: "latest-master-build", python: "3.13"}
+          - {impl: c, crdb: "latest-v25.1-build", python: "3.13", libpq: newest}
+          - {impl: c, crdb: "latest-v24.3-build", python: "3.8", libpq: newest}
+          - {impl: python, crdb: "latest-v23.2-build", python: "3.12"}
     env:
       PSYCOPG_IMPL: ${{ matrix.impl }}
       DEPS: ./psycopg[test] ./psycopg_pool
       PSYCOPG_TEST_DSN: "host=127.0.0.1 port=26257 user=root dbname=defaultdb"
+      CRDB_REPO: us-docker.pkg.dev/cockroach-cloud-images/cockroachdb/cockroach
+      # Since CRDB 25.1, 'on' should become the default, which will break
+      # the test suite assumption.
+      # https://www.cockroachlabs.com/docs/stable/online-schema-changes#enable-automatic-commit-before-running-schema-changes-inside-transactions
+      PGOPTIONS: "-c autocommit_before_ddl=off"
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
 
@@ -255,9 +410,9 @@ jobs:
         # Note: this would love to be a service, but I don't see a way to pass
         # the args to the docker run command line.
         run: |
-          docker pull cockroachdb/cockroach:${{ matrix.crdb }}
-          docker run --rm -d --name crdb -p 26257:26257 \
-            cockroachdb/cockroach:${{ matrix.crdb }} start-single-node --insecure
+          docker pull ${CRDB_REPO}:${{ matrix.crdb }}
+          docker run --rm -d --name crdb -p 26257:26257 ${CRDB_REPO}:${{ matrix.crdb }} \
+            start-single-node --insecure
 
       - name: Install the wanted libpq version
         run: sudo ./tools/build/ci_install_libpq.sh ${{ matrix.libpq }}

@@ -14,16 +14,18 @@ with a specified version tag, and then query it using:
     %(prog)s "host=localhost port=11111 user=postgres password=password"
 """
 
+from __future__ import annotations
+
 import re
 import argparse
 import subprocess as sp
-from typing import List
 from pathlib import Path
-from typing_extensions import TypeAlias
 
 import psycopg
-from psycopg.rows import TupleRow
+from psycopg.pq import version_pretty
 from psycopg.crdb import CrdbConnection
+from psycopg.rows import TupleRow
+from psycopg._compat import TypeAlias
 
 Connection: TypeAlias = psycopg.Connection[TupleRow]
 
@@ -39,10 +41,11 @@ def main() -> None:
         update_crdb_python_oids(conn)
     else:
         update_python_oids(conn)
+        update_python_types(conn)
         update_cython_oids(conn)
 
 
-def update_python_oids(conn: Connection) -> None:
+def update_python_types(conn: Connection) -> None:
     fn = ROOT / "psycopg/psycopg/postgres.py"
 
     lines = []
@@ -50,6 +53,17 @@ def update_python_oids(conn: Connection) -> None:
     lines.extend(get_py_types(conn))
     lines.extend(get_py_ranges(conn))
     lines.extend(get_py_multiranges(conn))
+
+    update_file(fn, lines)
+    sp.check_call(["black", "-q", fn])
+
+
+def update_python_oids(conn: Connection) -> None:
+    fn = ROOT / "psycopg/psycopg/_oids.py"
+
+    lines = []
+    lines.extend(get_version_comment(conn))
+    lines.extend(get_py_oids(conn))
 
     update_file(fn, lines)
     sp.check_call(["black", "-q", fn])
@@ -76,21 +90,52 @@ def update_crdb_python_oids(conn: Connection) -> None:
     sp.check_call(["black", "-q", fn])
 
 
-def get_version_comment(conn: Connection) -> List[str]:
+def get_version_comment(conn: Connection) -> list[str]:
     if conn.info.vendor == "PostgreSQL":
-        # Assume PG > 10
-        num = conn.info.server_version
-        version = f"{num // 10000}.{num % 100}"
+        version = version_pretty(conn.info.server_version)
     elif conn.info.vendor == "CockroachDB":
         assert isinstance(conn, CrdbConnection)
-        num = conn.info.server_version
-        version = f"{num // 10000}.{num % 10000 // 100}.{num % 100}"
+        version = version_pretty(conn.info.server_version)
     else:
         raise NotImplementedError(f"unexpected vendor: {conn.info.vendor}")
     return ["", f"    # Generated from {conn.info.vendor} {version}", ""]
 
 
-def get_py_types(conn: Connection) -> List[str]:
+def get_py_oids(conn: Connection) -> list[str]:
+    lines = []
+    for typname, oid in conn.execute(
+        """
+select typname, oid
+from pg_type
+where
+    oid < 10000
+    and (typtype = any('{b,r,m}') or typname = 'record')
+    and (typname !~ '^(_|pg_)' or typname = 'pg_lsn')
+order by typname
+"""
+    ):
+        const_name = typname.upper() + "_OID"
+        lines.append(f"{const_name} = {oid}")
+
+    return lines
+
+
+typemods = {
+    "char": "CharTypeModifier",
+    "bpchar": "CharTypeModifier",
+    "varchar": "CharTypeModifier",
+    "numeric": "NumericTypeModifier",
+    "time": "TimeTypeModifier",
+    "timetz": "TimeTypeModifier",
+    "timestamp": "TimeTypeModifier",
+    "timestamptz": "TimeTypeModifier",
+    "interval": "TimeTypeModifier",
+    "bit": "BitTypeModifier",
+    "varbit": "BitTypeModifier",
+}
+
+
+def get_py_types(conn: Connection) -> list[str]:
     # Note: "record" is a pseudotype but still a useful one to have.
     # "pg_lsn" is a documented public type and useful in streaming replication
     lines = []
@@ -109,6 +154,8 @@ where
 order by typname
 """
     ):
+        typemod = typemods.get(typname)
+
         # Weird legacy type in postgres catalog
         if typname == "char":
             typname = regtype = '"char"'
@@ -117,9 +164,11 @@ order by typname
         if typname == "int4" and conn.info.vendor == "CockroachDB":
             regtype = typname
 
-        params = [f"{typname!r}, {oid}, {typarray}"]
+        params = [repr(typname), str(oid), str(typarray)]
         if regtype != typname:
             params.append(f"regtype={regtype!r}")
+        if typemod:
+            params.append(f"typemod={typemod}")
         if typdelim != ",":
             params.append(f"delimiter={typdelim!r}")
         lines.append(f"TypeInfo({','.join(params)}),")
@@ -127,7 +176,7 @@ order by typname
     return lines
 
 
-def get_py_ranges(conn: Connection) -> List[str]:
+def get_py_ranges(conn: Connection) -> list[str]:
     lines = []
     for typname, oid, typarray, rngsubtype in conn.execute(
         """
@@ -147,7 +196,7 @@ order by typname
     return lines
 
 
-def get_py_multiranges(conn: Connection) -> List[str]:
+def get_py_multiranges(conn: Connection) -> list[str]:
     lines = []
     for typname, oid, typarray, rngtypid, rngsubtype in conn.execute(
         """
@@ -170,7 +219,7 @@ order by typname
     return lines
 
 
-def get_cython_oids(conn: Connection) -> List[str]:
+def get_cython_oids(conn: Connection) -> list[str]:
     lines = []
     for typname, oid in conn.execute(
         """
@@ -189,7 +238,7 @@ order by typname
     return lines
 
 
-def update_file(fn: Path, new: List[str]) -> None:
+def update_file(fn: Path, new: list[str]) -> None:
     with fn.open("r") as f:
         lines = f.read().splitlines()
     istart, iend = [
@@ -197,7 +246,7 @@ def update_file(fn: Path, new: List[str]) -> None:
         for i, line in enumerate(lines)
         if re.match(r"\s*#\s*autogenerated:\s+(start|end)", line)
     ]
-    lines[istart + 1 : iend] = new
+    lines[istart + 1 : iend] = new + [""]
 
     with fn.open("w") as f:
         f.write("\n".join(lines))

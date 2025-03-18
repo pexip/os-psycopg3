@@ -40,6 +40,9 @@ cdef extern from "libpq-fe.h":
         int     be_pid
         char   *extra
 
+    ctypedef struct PGcancelConn:
+        pass
+
     ctypedef struct PGcancel:
         pass
 
@@ -53,6 +56,8 @@ cdef extern from "libpq-fe.h":
         int     atttypmod
 
     # enums
+
+    # Check in src/interfaces/libpq/libpq-fe.h for updates.
 
     ctypedef enum PostgresPollingStatusType:
         PGRES_POLLING_FAILED = 0
@@ -79,8 +84,11 @@ cdef extern from "libpq-fe.h":
         CONNECTION_SSL_STARTUP
         CONNECTION_NEEDED
         CONNECTION_CHECK_WRITABLE
+        CONNECTION_CONSUME
         CONNECTION_GSS_STARTUP
-        # CONNECTION_CHECK_TARGET PG 12
+        CONNECTION_CHECK_TARGET
+        CONNECTION_CHECK_STANDBY
+        CONNECTION_ALLOCATED
 
     ctypedef enum PGTransactionStatusType:
         PQTRANS_IDLE
@@ -101,7 +109,8 @@ cdef extern from "libpq-fe.h":
         PGRES_COPY_BOTH
         PGRES_SINGLE_TUPLE
         PGRES_PIPELINE_SYNC
-        PGRES_PIPELINE_ABORT
+        PGRES_PIPELINE_ABORTED
+        PGRES_TUPLES_CHUNK
 
     # 33.1. Database Connection Control Functions
     PGconn *PQconnectdb(const char *conninfo)
@@ -162,6 +171,8 @@ cdef extern from "libpq-fe.h":
                              int resultFormat) nogil
     PGresult *PQdescribePrepared(PGconn *conn, const char *stmtName) nogil
     PGresult *PQdescribePortal(PGconn *conn, const char *portalName) nogil
+    PGresult *PQclosePrepared(PGconn *conn, const char *stmtName) nogil
+    PGresult *PQclosePortal(PGconn *conn, const char *portalName) nogil
     ExecStatusType PQresultStatus(const PGresult *res) nogil
     # PQresStatus: not needed, we have pretty enums
     char *PQresultErrorMessage(const PGresult *res) nogil
@@ -234,6 +245,8 @@ cdef extern from "libpq-fe.h":
                             int resultFormat) nogil
     int PQsendDescribePrepared(PGconn *conn, const char *stmtName) nogil
     int PQsendDescribePortal(PGconn *conn, const char *portalName) nogil
+    int PQsendClosePrepared(PGconn *conn, const char *stmtName) nogil
+    int PQsendClosePortal(PGconn *conn, const char *portalName) nogil
     PGresult *PQgetResult(PGconn *conn) nogil
     int PQconsumeInput(PGconn *conn) nogil
     int PQisBusy(PGconn *conn) nogil
@@ -241,10 +254,20 @@ cdef extern from "libpq-fe.h":
     int PQisnonblocking(const PGconn *conn)
     int PQflush(PGconn *conn) nogil
 
-    # 33.5. Retrieving Query Results Row-by-Row
+    # 32.6. Retrieving Query Results in Chunks
     int PQsetSingleRowMode(PGconn *conn)
+    int PQsetChunkedRowsMode(PGconn *conn, int chunkSize)
 
-    # 33.6. Canceling Queries in Progress
+    # 34.7. Canceling Queries in Progress
+    PGcancelConn *PQcancelCreate(PGconn *conn)
+    int PQcancelStart(PGcancelConn *cancelConn)
+    int PQcancelBlocking(PGcancelConn *cancelConn)
+    PostgresPollingStatusType PQcancelPoll(PGcancelConn *cancelConn) nogil
+    ConnStatusType PQcancelStatus(const PGcancelConn *cancelConn)
+    int PQcancelSocket(PGcancelConn *cancelConn)
+    char *PQcancelErrorMessage(const PGcancelConn *cancelConn)
+    void PQcancelReset(PGcancelConn *cancelConn)
+    void PQcancelFinish(PGcancelConn *cancelConn)
     PGcancel *PQgetCancel(PGconn *conn)
     void PQfreeCancel(PGcancel *cancel)
     int PQcancel(PGcancel *cancel, char *errbuf, int errbufsize)
@@ -267,6 +290,7 @@ cdef extern from "libpq-fe.h":
     void PQconninfoFree(PQconninfoOption *connOptions)
     char *PQencryptPasswordConn(
         PGconn *conn, const char *passwd, const char *user, const char *algorithm);
+    PGresult *PQchangePassword(PGconn *conn, const char *user, const char *passwd);
     PGresult *PQmakeEmptyPGresult(PGconn *conn, ExecStatusType status)
     int PQsetResultAttrs(PGresult *res, int numAttributes, PGresAttDesc *attDescs)
     int PQlibVersion()
@@ -317,5 +341,24 @@ typedef enum {
 #define PQpipelineSync(conn) 0
 #define PQsendFlushRequest(conn) 0
 #define PQsetTraceFlags(conn, stream) do {} while (0)
+#endif
+
+#if PG_VERSION_NUM < 170000
+typedef struct pg_cancel_conn PGcancelConn;
+#define PQchangePassword(conn, user, passwd) NULL
+#define PQclosePrepared(conn, name) NULL
+#define PQclosePortal(conn, name) NULL
+#define PQsendClosePrepared(conn, name) 0
+#define PQsendClosePortal(conn, name) 0
+#define PQcancelCreate(conn) NULL
+#define PQcancelStart(cancelConn) 0
+#define PQcancelBlocking(cancelConn) 0
+#define PQcancelPoll(cancelConn) CONNECTION_OK
+#define PQcancelStatus(cancelConn) 0
+#define PQcancelSocket(cancelConn) -1
+#define PQcancelErrorMessage(cancelConn) NULL
+#define PQcancelReset(cancelConn) 0
+#define PQcancelFinish(cancelConn) 0
+#define PQsetChunkedRowsMode(conn, chunkSize) 0
 #endif
 """

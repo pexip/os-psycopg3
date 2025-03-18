@@ -1,14 +1,16 @@
+from __future__ import annotations
+
 import enum
+from math import exp, isinf, isnan
 from decimal import Decimal
-from math import isnan, isinf, exp
 
 import pytest
 
 import psycopg
-from psycopg import pq
-from psycopg import sql
-from psycopg.adapt import Transformer, PyFormat
-from psycopg.types.numeric import FloatLoader
+from psycopg import pq, sql
+from psycopg.abc import Buffer
+from psycopg.adapt import PyFormat, Transformer
+from psycopg.types.numeric import FloatLoader, Int8, Int8BinaryDumper, Int8Dumper
 
 from ..fix_crdb import is_crdb
 
@@ -71,6 +73,22 @@ def test_dump_int_subtypes(conn, val, expr, fmt_in):
     ok, want, got = cur.fetchone()
     assert got == want
     assert ok
+
+
+@pytest.mark.parametrize("fmt_in", [PyFormat.TEXT, PyFormat.BINARY])
+def test_int_none(conn, fmt_in):
+    Base: type = Int8Dumper if fmt_in == PyFormat.TEXT else Int8BinaryDumper
+
+    class MyDumper(Base):  # type: ignore
+        def dump(self, obj: int) -> Buffer | None:
+            if not obj:
+                return None
+            else:
+                return super().dump(obj)  # type: ignore
+
+    conn.adapters.register_dumper(Int8, MyDumper)
+    cur = conn.execute("select %s, %s", [Int8(0), Int8(1)])
+    assert cur.fetchone() == (None, 1)
 
 
 class MyEnum(enum.IntEnum):
@@ -402,9 +420,11 @@ def test_dump_numeric_binary(conn, expr):
 @pytest.mark.parametrize(
     "fmt_in",
     [
-        f
-        if f != PyFormat.BINARY
-        else pytest.param(f, marks=pytest.mark.crdb_skip("binary decimal"))
+        (
+            f
+            if f != PyFormat.BINARY
+            else pytest.param(f, marks=pytest.mark.crdb_skip("binary decimal"))
+        )
         for f in PyFormat
     ],
 )

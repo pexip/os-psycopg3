@@ -1,18 +1,19 @@
 """
-Dict to hstore adaptation
+dict to hstore adaptation
 """
 
 # Copyright (C) 2021 The Psycopg Team
 
+from __future__ import annotations
+
 import re
-from typing import Dict, List, Optional
-from typing_extensions import TypeAlias
 
 from .. import errors as e
 from .. import postgres
-from ..abc import Buffer, AdaptContext
+from ..abc import AdaptContext, Buffer
+from .._oids import TEXT_OID
 from ..adapt import PyFormat, RecursiveDumper, RecursiveLoader
-from ..postgres import TEXT_OID
+from .._compat import TypeAlias, cache
 from .._typeinfo import TypeInfo
 
 _re_escape = re.compile(r'(["\\])')
@@ -35,15 +36,15 @@ _re_hstore = re.compile(
 )
 
 
-Hstore: TypeAlias = Dict[str, Optional[str]]
+Hstore: TypeAlias = "dict[str, str | None]"
 
 
 class BaseHstoreDumper(RecursiveDumper):
-    def dump(self, obj: Hstore) -> Buffer:
+    def dump(self, obj: Hstore) -> Buffer | None:
         if not obj:
             return b""
 
-        tokens: List[str] = []
+        tokens: list[str] = []
 
         def add_token(s: str) -> None:
             tokens.append('"')
@@ -96,7 +97,7 @@ class HstoreLoader(RecursiveLoader):
         return rv
 
 
-def register_hstore(info: TypeInfo, context: Optional[AdaptContext] = None) -> None:
+def register_hstore(info: TypeInfo, context: AdaptContext | None = None) -> None:
     """Register the adapters to load and dump hstore.
 
     :param info: The object with the information about the hstore type.
@@ -121,10 +122,25 @@ def register_hstore(info: TypeInfo, context: Optional[AdaptContext] = None) -> N
     adapters = context.adapters if context else postgres.adapters
 
     # Generate and register a customized text dumper
-    class HstoreDumper(BaseHstoreDumper):
-        oid = info.oid
-
-    adapters.register_dumper(dict, HstoreDumper)
+    adapters.register_dumper(dict, _make_hstore_dumper(info.oid))
 
     # register the text loader on the oid
     adapters.register_loader(info.oid, HstoreLoader)
+
+
+# Cache all dynamically-generated types to avoid leaks in case the types
+# cannot be GC'd.
+
+
+@cache
+def _make_hstore_dumper(oid_in: int) -> type[BaseHstoreDumper]:
+    """
+    Return an hstore dumper class configured using `oid_in`.
+
+    Avoid to create new classes if the oid configured is the same.
+    """
+
+    class HstoreDumper(BaseHstoreDumper):
+        oid = oid_in
+
+    return HstoreDumper

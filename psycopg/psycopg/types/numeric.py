@@ -1,62 +1,74 @@
 """
-Adapers for numeric types.
+Adapters for numeric types.
 """
 
 # Copyright (C) 2020 The Psycopg Team
 
-import struct
-from math import log
-from typing import Any, Callable, DefaultDict, Dict, Tuple, Union, cast
-from decimal import Decimal, DefaultContext, Context
+from __future__ import annotations
 
-from .. import postgres
+import sys
+import struct
+from abc import ABC, abstractmethod
+from math import log
+from typing import TYPE_CHECKING, Any, Callable, DefaultDict, cast
+from decimal import Context, Decimal, DefaultContext
+
+from .. import _oids
 from .. import errors as e
 from ..pq import Format
 from ..abc import AdaptContext
 from ..adapt import Buffer, Dumper, Loader, PyFormat
-from .._struct import pack_int2, pack_uint2, unpack_int2
-from .._struct import pack_int4, pack_uint4, unpack_int4, unpack_uint4
-from .._struct import pack_int8, unpack_int8
-from .._struct import pack_float4, pack_float8, unpack_float4, unpack_float8
+from .._struct import pack_float4, pack_float8, pack_int2, pack_int4, pack_int8
+from .._struct import pack_uint2, pack_uint4, unpack_float4, unpack_float8, unpack_int2
+from .._struct import unpack_int4, unpack_int8, unpack_uint4
 
 # Exposed here
-from .._wrappers import (
-    Int2 as Int2,
-    Int4 as Int4,
-    Int8 as Int8,
-    IntNumeric as IntNumeric,
-    Oid as Oid,
-    Float4 as Float4,
-    Float8 as Float8,
-)
+from .._wrappers import Float4 as Float4
+from .._wrappers import Float8 as Float8
+from .._wrappers import Int2 as Int2
+from .._wrappers import Int4 as Int4
+from .._wrappers import Int8 as Int8
+from .._wrappers import IntNumeric as IntNumeric
+from .._wrappers import Oid as Oid
+
+if TYPE_CHECKING:
+    import numpy
 
 
 class _IntDumper(Dumper):
-    def dump(self, obj: Any) -> Buffer:
-        t = type(obj)
-        if t is not int:
-            # Convert to int in order to dump IntEnum correctly
-            if issubclass(t, int):
-                obj = int(obj)
-            else:
-                raise e.DataError(f"integer expected, got {type(obj).__name__!r}")
-
+    def dump(self, obj: Any) -> Buffer | None:
         return str(obj).encode()
 
     def quote(self, obj: Any) -> Buffer:
         value = self.dump(obj)
+        if value is None:
+            return b"NULL"
         return value if obj >= 0 else b" " + value
 
 
-class _SpecialValuesDumper(Dumper):
-    _special: Dict[bytes, bytes] = {}
+class _IntOrSubclassDumper(_IntDumper):
+    def dump(self, obj: Any) -> Buffer | None:
+        t = type(obj)
+        # Convert to int in order to dump IntEnum or numpy.integer correctly
+        if t is not int:
+            obj = int(obj)
 
-    def dump(self, obj: Any) -> bytes:
         return str(obj).encode()
 
-    def quote(self, obj: Any) -> bytes:
+
+class _SpecialValuesDumper(Dumper):
+    _special: dict[bytes, bytes] = {}
+
+    def dump(self, obj: Any) -> Buffer | None:
+        return str(obj).encode()
+
+    def quote(self, obj: Any) -> Buffer:
         value = self.dump(obj)
 
+        if value is None:
+            return b"NULL"
+        if not isinstance(value, bytes):
+            value = bytes(value)
         if value in self._special:
             return self._special[value]
 
@@ -64,7 +76,7 @@ class _SpecialValuesDumper(Dumper):
 
 
 class FloatDumper(_SpecialValuesDumper):
-    oid = postgres.types["float8"].oid
+    oid = _oids.FLOAT8_OID
 
     _special = {
         b"inf": b"'Infinity'::float8",
@@ -74,33 +86,29 @@ class FloatDumper(_SpecialValuesDumper):
 
 
 class Float4Dumper(FloatDumper):
-    oid = postgres.types["float4"].oid
+    oid = _oids.FLOAT4_OID
 
 
 class FloatBinaryDumper(Dumper):
     format = Format.BINARY
-    oid = postgres.types["float8"].oid
+    oid = _oids.FLOAT8_OID
 
-    def dump(self, obj: float) -> bytes:
+    def dump(self, obj: float) -> Buffer | None:
         return pack_float8(obj)
 
 
 class Float4BinaryDumper(FloatBinaryDumper):
-    oid = postgres.types["float4"].oid
+    oid = _oids.FLOAT4_OID
 
-    def dump(self, obj: float) -> bytes:
+    def dump(self, obj: float) -> Buffer | None:
         return pack_float4(obj)
 
 
 class DecimalDumper(_SpecialValuesDumper):
-    oid = postgres.types["numeric"].oid
+    oid = _oids.NUMERIC_OID
 
-    def dump(self, obj: Decimal) -> bytes:
-        if obj.is_nan():
-            # cover NaN and sNaN
-            return b"NaN"
-        else:
-            return str(obj).encode()
+    def dump(self, obj: Decimal) -> Buffer | None:
+        return dump_decimal_to_text(obj)
 
     _special = {
         b"Infinity": b"'Infinity'::numeric",
@@ -109,28 +117,28 @@ class DecimalDumper(_SpecialValuesDumper):
     }
 
 
-class Int2Dumper(_IntDumper):
-    oid = postgres.types["int2"].oid
+class Int2Dumper(_IntOrSubclassDumper):
+    oid = _oids.INT2_OID
 
 
-class Int4Dumper(_IntDumper):
-    oid = postgres.types["int4"].oid
+class Int4Dumper(_IntOrSubclassDumper):
+    oid = _oids.INT4_OID
 
 
-class Int8Dumper(_IntDumper):
-    oid = postgres.types["int8"].oid
+class Int8Dumper(_IntOrSubclassDumper):
+    oid = _oids.INT8_OID
 
 
-class IntNumericDumper(_IntDumper):
-    oid = postgres.types["numeric"].oid
+class IntNumericDumper(_IntOrSubclassDumper):
+    oid = _oids.NUMERIC_OID
 
 
-class OidDumper(_IntDumper):
-    oid = postgres.types["oid"].oid
+class OidDumper(_IntOrSubclassDumper):
+    oid = _oids.OID_OID
 
 
 class IntDumper(Dumper):
-    def dump(self, obj: Any) -> bytes:
+    def dump(self, obj: Any) -> Buffer | None:
         raise TypeError(
             f"{type(self).__name__} is a dispatcher to other dumpers:"
             " dump() is not supposed to be called"
@@ -160,21 +168,21 @@ class IntDumper(Dumper):
 class Int2BinaryDumper(Int2Dumper):
     format = Format.BINARY
 
-    def dump(self, obj: int) -> bytes:
+    def dump(self, obj: int) -> Buffer | None:
         return pack_int2(obj)
 
 
 class Int4BinaryDumper(Int4Dumper):
     format = Format.BINARY
 
-    def dump(self, obj: int) -> bytes:
+    def dump(self, obj: int) -> Buffer | None:
         return pack_int4(obj)
 
 
 class Int8BinaryDumper(Int8Dumper):
     format = Format.BINARY
 
-    def dump(self, obj: int) -> bytes:
+    def dump(self, obj: int) -> Buffer | None:
         return pack_int8(obj)
 
 
@@ -186,14 +194,14 @@ BIT_PER_PGDIGIT = log(2) / log(10_000)
 class IntNumericBinaryDumper(IntNumericDumper):
     format = Format.BINARY
 
-    def dump(self, obj: int) -> Buffer:
+    def dump(self, obj: int) -> Buffer | None:
         return dump_int_to_numeric_binary(obj)
 
 
 class OidBinaryDumper(OidDumper):
     format = Format.BINARY
 
-    def dump(self, obj: int) -> bytes:
+    def dump(self, obj: int) -> Buffer | None:
         return pack_uint4(obj)
 
 
@@ -304,7 +312,7 @@ for i in range(DefaultContext.prec):
     _contexts[i] = DefaultContext
 
 _unpack_numeric_head = cast(
-    Callable[[Buffer], Tuple[int, int, int, int]],
+    Callable[[Buffer], "tuple[int, int, int, int]"],
     struct.Struct("!HhHH").unpack_from,
 )
 _pack_numeric_head = cast(
@@ -344,32 +352,77 @@ NUMERIC_NINF_BIN = _pack_numeric_head(0, 0, NUMERIC_NINF, 0)
 
 class DecimalBinaryDumper(Dumper):
     format = Format.BINARY
-    oid = postgres.types["numeric"].oid
+    oid = _oids.NUMERIC_OID
 
-    def dump(self, obj: Decimal) -> Buffer:
+    def dump(self, obj: Decimal) -> Buffer | None:
         return dump_decimal_to_numeric_binary(obj)
 
 
-class NumericDumper(DecimalDumper):
-    def dump(self, obj: Union[Decimal, int]) -> bytes:
-        if isinstance(obj, int):
+class _MixedNumericDumper(Dumper, ABC):
+    """Base for dumper to dump int, decimal, numpy.integer to Postgres numeric
+
+    Only used when looking up by oid.
+    """
+
+    oid = _oids.NUMERIC_OID
+
+    # If numpy is available, the dumped object might be a numpy integer too
+    int_classes: type | tuple[type, ...] = ()
+
+    def __init__(self, cls: type, context: AdaptContext | None = None):
+        super().__init__(cls, context)
+
+        # Verify if numpy is available. If it is, we might have to dump
+        # its integers too.
+        if not _MixedNumericDumper.int_classes:
+            if "numpy" in sys.modules:
+                import numpy
+
+                _MixedNumericDumper.int_classes = (int, numpy.integer)
+            else:
+                _MixedNumericDumper.int_classes = int
+
+    @abstractmethod
+    def dump(self, obj: Decimal | int | numpy.integer[Any]) -> Buffer | None: ...
+
+
+class NumericDumper(_MixedNumericDumper):
+    def dump(self, obj: Decimal | int | numpy.integer[Any]) -> Buffer | None:
+        if isinstance(obj, self.int_classes):
             return str(obj).encode()
+        elif isinstance(obj, Decimal):
+            return dump_decimal_to_text(obj)
         else:
-            return super().dump(obj)
+            raise TypeError(
+                f"class {type(self).__name__} cannot dump {type(obj).__name__}"
+            )
 
 
-class NumericBinaryDumper(Dumper):
+class NumericBinaryDumper(_MixedNumericDumper):
     format = Format.BINARY
-    oid = postgres.types["numeric"].oid
 
-    def dump(self, obj: Union[Decimal, int]) -> Buffer:
-        if isinstance(obj, int):
+    def dump(self, obj: Decimal | int | numpy.integer[Any]) -> Buffer | None:
+        if type(obj) is int:
             return dump_int_to_numeric_binary(obj)
-        else:
+        elif isinstance(obj, Decimal):
             return dump_decimal_to_numeric_binary(obj)
+        elif isinstance(obj, self.int_classes):
+            return dump_int_to_numeric_binary(int(obj))
+        else:
+            raise TypeError(
+                f"class {type(self).__name__} cannot dump {type(obj).__name__}"
+            )
 
 
-def dump_decimal_to_numeric_binary(obj: Decimal) -> Union[bytearray, bytes]:
+def dump_decimal_to_text(obj: Decimal) -> bytes:
+    if obj.is_nan():
+        # cover NaN and sNaN
+        return b"NaN"
+    else:
+        return str(obj).encode()
+
+
+def dump_decimal_to_numeric_binary(obj: Decimal) -> bytearray | bytes:
     sign, digits, exp = obj.as_tuple()
     if exp == "n" or exp == "N":
         return NUMERIC_NAN_BIN

@@ -6,6 +6,7 @@ Access to endian conversion function
 
 from libc.stdint cimport uint16_t, uint32_t, uint64_t
 
+
 cdef extern from * nogil:
     # from https://gist.github.com/panzi/6856583
     # Improved in:
@@ -131,6 +132,8 @@ cdef extern from * nogil:
 #	define __LITTLE_ENDIAN LITTLE_ENDIAN
 #	define __PDP_ENDIAN    PDP_ENDIAN
 
+#elif defined(__sun)
+#	include <endian.h>
 #else
 
 #	error platform not supported

@@ -1,17 +1,47 @@
+from __future__ import annotations
+
 import os
 import sys
+import time
 import ctypes
 import logging
 import weakref
+import contextlib
 from select import select
+from typing import TYPE_CHECKING, Iterator
+from functools import partial
 
 import pytest
 
 import psycopg
-from psycopg import pq
 import psycopg.generators
+from psycopg import pq
 
-from ..utils import gc_collect
+if TYPE_CHECKING:
+    from psycopg.pq.abc import PGcancelConn, PGconn
+
+
+def wait(
+    conn: PGconn | PGcancelConn,
+    poll_method: str = "connect_poll",
+    return_on: pq.PollingStatus = pq.PollingStatus.OK,
+    timeout: int | None = None,
+) -> None:
+    poll = getattr(conn, poll_method)
+    while True:
+        assert conn.status != pq.ConnStatus.BAD, conn.error_message
+        rv = poll()
+        if rv == return_on:
+            return
+        elif rv == pq.PollingStatus.READING:
+            select([conn.socket], [], [], timeout)
+        elif rv == pq.PollingStatus.WRITING:
+            select([], [conn.socket], [], timeout)
+        else:
+            pytest.fail(f"unexpected poll result: {rv}")
+    assert (
+        conn.status == pq.ConnStatus.OK
+    ), f"unexpected connection status: {conn.error_message}"
 
 
 def test_connectdb(dsn):
@@ -33,20 +63,7 @@ def test_connectdb_badtype(baddsn):
 def test_connect_async(dsn):
     conn = pq.PGconn.connect_start(dsn.encode())
     conn.nonblocking = 1
-    while True:
-        assert conn.status != pq.ConnStatus.BAD
-        rv = conn.connect_poll()
-        if rv == pq.PollingStatus.OK:
-            break
-        elif rv == pq.PollingStatus.READING:
-            select([conn.socket], [], [])
-        elif rv == pq.PollingStatus.WRITING:
-            select([], [conn.socket], [])
-        else:
-            assert False, rv
-
-    assert conn.status == pq.ConnStatus.OK
-
+    wait(conn)
     conn.finish()
     with pytest.raises(psycopg.OperationalError):
         conn.connect_poll()
@@ -58,18 +75,7 @@ def test_connect_async_bad(dsn):
     parsed_dsn[b"dbname"] = b"psycopg_test_not_for_real"
     dsn = b" ".join(b"%s='%s'" % item for item in parsed_dsn.items())
     conn = pq.PGconn.connect_start(dsn)
-    while True:
-        assert conn.status != pq.ConnStatus.BAD, conn.error_message
-        rv = conn.connect_poll()
-        if rv == pq.PollingStatus.FAILED:
-            break
-        elif rv == pq.PollingStatus.READING:
-            select([conn.socket], [], [])
-        elif rv == pq.PollingStatus.WRITING:
-            select([], [conn.socket], [])
-        else:
-            assert False, rv
-
+    wait(conn, return_on=pq.PollingStatus.FAILED)
     assert conn.status == pq.ConnStatus.BAD
 
 
@@ -82,7 +88,7 @@ def test_finish(pgconn):
 
 
 @pytest.mark.slow
-def test_weakref(dsn):
+def test_weakref(dsn, gc_collect):
     conn = pq.PGconn.connect(dsn.encode())
     w = weakref.ref(conn)
     conn.finish()
@@ -159,17 +165,7 @@ def test_reset_async(pgconn):
     pgconn.exec_(b"select pg_terminate_backend(pg_backend_pid())")
     assert pgconn.status == pq.ConnStatus.BAD
     pgconn.reset_start()
-    while True:
-        rv = pgconn.reset_poll()
-        if rv == pq.PollingStatus.READING:
-            select([pgconn.socket], [], [])
-        elif rv == pq.PollingStatus.WRITING:
-            select([], [pgconn.socket], [])
-        else:
-            break
-
-    assert rv == pq.PollingStatus.OK
-    assert pgconn.status == pq.ConnStatus.OK
+    wait(pgconn, "reset_poll")
 
     pgconn.finish()
     with pytest.raises(psycopg.OperationalError):
@@ -334,6 +330,16 @@ def test_error_message(pgconn):
     assert b"NULL" in pgconn.error_message  # TODO: i10n?
 
 
+def test_get_error_message(pgconn):
+    assert pgconn.get_error_message() == "no error details available"
+    res = pgconn.exec_(b"wat")
+    assert res.status == pq.ExecStatus.FATAL_ERROR
+    msg = pgconn.get_error_message()
+    assert "wat" in msg
+    pgconn.finish()
+    assert "NULL" in pgconn.get_error_message()
+
+
 def test_backend_pid(pgconn):
     assert isinstance(pgconn.backend_pid, int)
     pgconn.finish()
@@ -389,6 +395,114 @@ def test_set_single_row_mode(pgconn):
 
     pgconn.send_query(b"select 1")
     pgconn.set_single_row_mode()
+
+
+@pytest.mark.libpq(">= 17")
+def test_set_chunked_rows_mode(pgconn):
+    with pytest.raises(psycopg.OperationalError):
+        pgconn.set_chunked_rows_mode(42)
+
+    pgconn.send_query(b"select 1")
+    pgconn.set_chunked_rows_mode(42)
+
+
+@contextlib.contextmanager
+def cancellable_query(pgconn: PGconn) -> Iterator[None]:
+    dsn = b" ".join(b"%s='%s'" % (i.keyword, i.val) for i in pgconn.info if i.val)
+    monitor_conn = pq.PGconn.connect(dsn)
+    assert (
+        monitor_conn.status == pq.ConnStatus.OK
+    ), f"bad connection: {monitor_conn.get_error_message()}"
+
+    pgconn.send_query_params(b"SELECT pg_sleep($1)", [b"10"])
+
+    while True:
+        r = monitor_conn.exec_(
+            b"SELECT count(*) FROM pg_stat_activity"
+            b" WHERE query = 'SELECT pg_sleep($1)'"
+            b" AND state = 'active'"
+        )
+        assert r.status == pq.ExecStatus.TUPLES_OK
+        if r.get_value(0, 0) != b"0":
+            del monitor_conn
+            break
+
+        time.sleep(0.01)
+
+    yield None
+
+    res = pgconn.get_result()
+    assert res is not None
+    assert res.status == pq.ExecStatus.FATAL_ERROR
+    assert res.error_field(pq.DiagnosticField.SQLSTATE) == b"57014"
+    while pgconn.is_busy():
+        pgconn.consume_input()
+
+
+@pytest.mark.libpq(">= 17")
+@pytest.mark.crdb("skip", reason="test hang - TODO investigate")
+def test_cancel_conn_blocking(pgconn):
+    # test PQcancelBlocking, similarly to test_cancel() from
+    # src/test/modules/libpq_pipeline/libpq_pipeline.c
+    pgconn.nonblocking = 1
+
+    with cancellable_query(pgconn):
+        cancel_conn = pgconn.cancel_conn()
+        assert cancel_conn.status == pq.ConnStatus.ALLOCATED
+        cancel_conn.blocking()
+        assert cancel_conn.status == pq.ConnStatus.OK
+
+    # test PQcancelReset works on the cancel connection and it can be reused
+    # after
+    cancel_conn.reset()
+    with cancellable_query(pgconn):
+        cancel_conn.blocking()
+        assert cancel_conn.status == pq.ConnStatus.OK
+
+
+@pytest.mark.libpq(">= 17")
+@pytest.mark.crdb("skip", reason="test *might* hang - TODO investigate")
+def test_cancel_conn_nonblocking(pgconn):
+    # test PQcancelStart() and then polling with PQcancelPoll, similarly to
+    # test_cancel() from src/test/modules/libpq_pipeline/libpq_pipeline.c
+    pgconn.nonblocking = 1
+
+    wait_cancel = partial(wait, poll_method="poll", timeout=3)
+
+    # test PQcancelCreate and then polling with PQcancelPoll
+    with cancellable_query(pgconn):
+        cancel_conn = pgconn.cancel_conn()
+        assert cancel_conn.status == pq.ConnStatus.ALLOCATED
+        cancel_conn.start()
+        # On network sockets, connection starts with STARTED.
+        # On Unix sockets, connection starts with MADE.
+        assert cancel_conn.status in (pq.ConnStatus.STARTED, pq.ConnStatus.MADE)
+        wait_cancel(cancel_conn)
+        assert cancel_conn.status == pq.ConnStatus.OK
+
+    # test PQcancelReset works on the cancel connection and it can be reused
+    # after
+    cancel_conn.reset()
+    with cancellable_query(pgconn):
+        cancel_conn.start()
+        wait_cancel(cancel_conn)
+        assert cancel_conn.status == pq.ConnStatus.OK
+
+
+@pytest.mark.libpq(">= 17")
+def test_cancel_conn_finished(pgconn):
+    cancel_conn = pgconn.cancel_conn()
+    cancel_conn.reset()
+    cancel_conn.finish()
+    with pytest.raises(psycopg.OperationalError):
+        cancel_conn.start()
+    with pytest.raises(psycopg.OperationalError):
+        cancel_conn.blocking()
+    with pytest.raises(psycopg.OperationalError):
+        cancel_conn.poll()
+    with pytest.raises(psycopg.OperationalError):
+        cancel_conn.reset()
+    assert cancel_conn.get_error_message() == "connection pointer is NULL"
 
 
 def test_cancel(pgconn):
@@ -526,6 +640,43 @@ def test_trace_nonlinux(pgconn):
         pgconn.trace(1)
 
 
+@pytest.mark.libpq(">= 17")
+def test_change_password_error(pgconn):
+    with pytest.raises(
+        psycopg.OperationalError, match='role(/user)? "ashesh" does not exist'
+    ):
+        pgconn.change_password(b"ashesh", b"psycopg")
+
+
+@pytest.fixture
+def role(pgconn: PGconn) -> Iterator[tuple[bytes, bytes]]:
+    user, passwd = "ashesh", "psycopg2"
+    r = pgconn.exec_(f"CREATE USER {user} LOGIN PASSWORD '{passwd}'".encode())
+    if r.status != pq.ExecStatus.COMMAND_OK:
+        pytest.skip(f"cannot create a PostgreSQL role: {r.get_error_message()}")
+    yield user.encode(), passwd.encode()
+    r = pgconn.exec_(f"DROP USER {user}".encode())
+    if r.status != pq.ExecStatus.COMMAND_OK:
+        pytest.fail(f"failed to drop {user} role: {r.get_error_message()}")
+
+
+@pytest.mark.libpq(">= 17")
+def test_change_password(pgconn, dsn, role):
+    user, passwd = role
+    conninfo = {e.keyword: e.val for e in pq.Conninfo.parse(dsn.encode()) if e.val}
+    conninfo.update({b"dbname": b"postgres", b"user": user, b"password": passwd})
+    # Avoid peer authentication
+    if b"host" not in conninfo:
+        conninfo[b"host"] = b"localhost"
+    conn = pq.PGconn.connect(b" ".join(b"%s='%s'" % item for item in conninfo.items()))
+    assert conn.status == pq.ConnStatus.OK, conn.error_message
+
+    pgconn.change_password(user, b"psycopg")
+    conninfo[b"password"] = b"psycopg"
+    conn = pq.PGconn.connect(b" ".join(b"%s='%s'" % item for item in conninfo.items()))
+    assert conn.status == pq.ConnStatus.OK, conn.error_message
+
+
 @pytest.mark.libpq(">= 10")
 def test_encrypt_password(pgconn):
     enc = pgconn.encrypt_password(b"psycopg2", b"ashesh", b"md5")
@@ -548,7 +699,7 @@ def test_encrypt_password_badalgo(pgconn):
 @pytest.mark.crdb_skip("password_encryption")
 def test_encrypt_password_query(pgconn):
     res = pgconn.exec_(b"set password_encryption to 'md5'")
-    assert res.status == pq.ExecStatus.COMMAND_OK, pgconn.error_message.decode()
+    assert res.status == pq.ExecStatus.COMMAND_OK, pgconn.get_error_message()
     enc = pgconn.encrypt_password(b"psycopg2", b"ashesh")
     assert enc == b"md594839d658c28a357126f105b9cb14cfc"
 

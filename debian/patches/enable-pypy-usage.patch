@@ -1,0 +1,35 @@
+From: Tomasz Rybak <serpent@debian.org>
+Date: Tue, 24 Sep 2024 21:12:38 +0200
+Subject: Allow for using module by PyPy
+
+Forwarded: not-needed
+Last-Update: 2024-09-24
+
+Prevent psycopg from loading of binary module (psycpog_c) when running
+under PyPy.
+===================================================================
+---
+ psycopg/psycopg/pq/__init__.py | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/psycopg/psycopg/pq/__init__.py b/psycopg/psycopg/pq/__init__.py
+index 4f24298..32bf53e 100644
+--- a/psycopg/psycopg/pq/__init__.py
++++ b/psycopg/psycopg/pq/__init__.py
+@@ -13,6 +13,7 @@ from __future__ import annotations
+ 
+ import os
+ import logging
++import platform
+ from typing import Callable
+ 
+ from . import abc
+@@ -71,7 +72,7 @@ def import_from_libpq() -> None:
+             raise ImportError(msg) from e
+ 
+     # The best implementation: fast but requires the system libpq installed
+-    if not impl or impl == "c":
++    if (not impl or impl == "c") and platform.python_implementation() == 'CPython':
+         try:
+             from psycopg_c import pq as module  # type: ignore
+         except Exception as e:

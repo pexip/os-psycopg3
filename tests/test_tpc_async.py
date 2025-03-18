@@ -3,9 +3,7 @@ import pytest
 import psycopg
 from psycopg.pq import TransactionStatus
 
-pytestmark = [
-    pytest.mark.crdb_skip("2-phase commit"),
-]
+pytestmark = pytest.mark.crdb_skip("2-phase commit")
 
 
 async def test_tpc_disabled(aconn, apipeline):
@@ -228,14 +226,8 @@ class TestTPC:
         assert xid.gtrid == gtrid
         assert xid.bqual == bqual
 
-    @pytest.mark.parametrize(
-        "tid",
-        [
-            "",
-            "hello, world!",
-            "x" * 199,  # PostgreSQL's limit in transaction id length
-        ],
-    )
+    # 199 is PostgreSQL's limit in transaction id length
+    @pytest.mark.parametrize("tid", ["", "hello, world!", "x" * 199])
     async def test_unparsed_roundtrip(self, aconn_cls, aconn, dsn, tpc, tid):
         await aconn.tpc_begin(tid)
         await aconn.tpc_prepare()
@@ -293,6 +285,8 @@ class TestTPC:
         await aconn.tpc_prepare()
         with pytest.raises(psycopg.ProgrammingError):
             aconn.cancel()
+        with pytest.raises(psycopg.ProgrammingError):
+            await aconn.cancel_safe()
 
     async def test_tpc_recover_non_dbapi_connection(self, aconn_cls, aconn, dsn, tpc):
         aconn.row_factory = psycopg.rows.dict_row

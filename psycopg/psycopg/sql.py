@@ -4,19 +4,22 @@ SQL composition utility module
 
 # Copyright (C) 2020 The Psycopg Team
 
+from __future__ import annotations
+
 import codecs
 import string
 from abc import ABC, abstractmethod
-from typing import Any, Iterator, Iterable, List, Optional, Sequence, Union
+from typing import Any, Iterable, Iterator, Sequence
 
 from .pq import Escaping
 from .abc import AdaptContext
-from .adapt import Transformer, PyFormat
+from ._enums import PyFormat
 from ._compat import LiteralString
 from ._encodings import conn_encoding
+from ._transformer import Transformer
 
 
-def quote(obj: Any, context: Optional[AdaptContext] = None) -> str:
+def quote(obj: Any, context: AdaptContext | None = None) -> str:
     """
     Adapt a Python object to a quoted SQL string.
 
@@ -36,15 +39,15 @@ class Composable(ABC):
     """
     Abstract base class for objects that can be used to compose an SQL string.
 
-    `!Composable` objects can be passed directly to
-    `~psycopg.Cursor.execute()`, `~psycopg.Cursor.executemany()`,
-    `~psycopg.Cursor.copy()` in place of the query string.
-
     `!Composable` objects can be joined using the ``+`` operator: the result
     will be a `Composed` instance containing the objects joined. The operator
     ``*`` is also supported with an integer argument: the result is a
     `!Composed` instance containing the left argument repeated as many times as
     requested.
+
+    `!SQL` and `!Composed` objects can be passed directly to
+    `~psycopg.Cursor.execute()`, `~psycopg.Cursor.executemany()`,
+    `~psycopg.Cursor.copy()` in place of the query string.
     """
 
     def __init__(self, obj: Any):
@@ -54,7 +57,7 @@ class Composable(ABC):
         return f"{self.__class__.__name__}({self._obj!r})"
 
     @abstractmethod
-    def as_bytes(self, context: Optional[AdaptContext]) -> bytes:
+    def as_bytes(self, context: AdaptContext | None = None) -> bytes:
         """
         Return the value of the object as bytes.
 
@@ -68,7 +71,7 @@ class Composable(ABC):
         """
         raise NotImplementedError
 
-    def as_string(self, context: Optional[AdaptContext]) -> str:
+    def as_string(self, context: AdaptContext | None = None) -> str:
         """
         Return the value of the object as string.
 
@@ -85,7 +88,7 @@ class Composable(ABC):
             # buffer object
             return codecs.lookup(enc).decode(b)[0]
 
-    def __add__(self, other: "Composable") -> "Composed":
+    def __add__(self, other: Composable) -> Composed:
         if isinstance(other, Composed):
             return Composed([self]) + other
         if isinstance(other, Composable):
@@ -93,7 +96,7 @@ class Composable(ABC):
         else:
             return NotImplemented
 
-    def __mul__(self, n: int) -> "Composed":
+    def __mul__(self, n: int) -> Composed:
         return Composed([self] * n)
 
     def __eq__(self, other: Any) -> bool:
@@ -107,10 +110,14 @@ class Composed(Composable):
     """
     A `Composable` object made of a sequence of `!Composable`.
 
-    The object is usually created using `!Composable` operators and methods.
-    However it is possible to create a `!Composed` directly specifying a
-    sequence of objects as arguments: if they are not `!Composable` they will
-    be wrapped in a `Literal`.
+    The object is usually created using `!Composable` operators and methods
+    (such as the `SQL.format()` method). `!Composed` objects can be passed
+    directly to `~psycopg.Cursor.execute()`, `~psycopg.Cursor.executemany()`,
+    `~psycopg.Cursor.copy()` in place of the query string.
+
+    It is also possible to create a `!Composed` directly specifying a sequence
+    of objects as arguments: if they are not `!Composable` they will be wrapped
+    in a `Literal`.
 
     Example::
 
@@ -123,19 +130,19 @@ class Composed(Composable):
     instance).
     """
 
-    _obj: List[Composable]
+    _obj: list[Composable]
 
     def __init__(self, seq: Sequence[Any]):
         seq = [obj if isinstance(obj, Composable) else Literal(obj) for obj in seq]
         super().__init__(seq)
 
-    def as_bytes(self, context: Optional[AdaptContext]) -> bytes:
+    def as_bytes(self, context: AdaptContext | None = None) -> bytes:
         return b"".join(obj.as_bytes(context) for obj in self._obj)
 
     def __iter__(self) -> Iterator[Composable]:
         return iter(self._obj)
 
-    def __add__(self, other: Composable) -> "Composed":
+    def __add__(self, other: Composable) -> Composed:
         if isinstance(other, Composed):
             return Composed(self._obj + other._obj)
         if isinstance(other, Composable):
@@ -143,7 +150,7 @@ class Composed(Composable):
         else:
             return NotImplemented
 
-    def join(self, joiner: Union["SQL", LiteralString]) -> "Composed":
+    def join(self, joiner: SQL | LiteralString) -> Composed:
         """
         Return a new `!Composed` interposing the `!joiner` with the `!Composed` items.
 
@@ -182,6 +189,10 @@ class SQL(Composable):
     statements; use other objects such as `Identifier` or `Literal` to
     represent variable parts.
 
+    `!SQL` objects can be passed directly to `~psycopg.Cursor.execute()`,
+    `~psycopg.Cursor.executemany()`, `~psycopg.Cursor.copy()` in place of the
+    query string.
+
     Example::
 
         >>> query = sql.SQL("SELECT {0} FROM {1}").format(
@@ -199,13 +210,12 @@ class SQL(Composable):
         if not isinstance(obj, str):
             raise TypeError(f"SQL values must be strings, got {obj!r} instead")
 
-    def as_string(self, context: Optional[AdaptContext]) -> str:
+    def as_string(self, context: AdaptContext | None = None) -> str:
         return self._obj
 
-    def as_bytes(self, context: Optional[AdaptContext]) -> bytes:
-        enc = "utf-8"
-        if context:
-            enc = conn_encoding(context.connection)
+    def as_bytes(self, context: AdaptContext | None = None) -> bytes:
+        conn = context.connection if context else None
+        enc = conn_encoding(conn)
         return self._obj.encode(enc)
 
     def format(self, *args: Any, **kwargs: Any) -> Composed:
@@ -243,8 +253,8 @@ class SQL(Composable):
             SELECT * FROM "people" WHERE name = 'O''Rourke'
 
         """
-        rv: List[Composable] = []
-        autonum: Optional[int] = 0
+        rv: list[Composable] = []
+        autonum: int | None = 0
         # TODO: this is probably not the right way to whitelist pre
         # pyre complains. Will wait for mypy to complain too to fix.
         pre: LiteralString
@@ -362,14 +372,21 @@ class Identifier(Composable):
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({', '.join(map(repr, self._obj))})"
 
-    def as_bytes(self, context: Optional[AdaptContext]) -> bytes:
+    def as_bytes(self, context: AdaptContext | None = None) -> bytes:
         conn = context.connection if context else None
-        if not conn:
-            raise ValueError("a connection is necessary for Identifier")
-        esc = Escaping(conn.pgconn)
-        enc = conn_encoding(conn)
-        escs = [esc.escape_identifier(s.encode(enc)) for s in self._obj]
+        if conn:
+            esc = Escaping(conn.pgconn)
+            enc = conn_encoding(conn)
+            escs = [esc.escape_identifier(s.encode(enc)) for s in self._obj]
+        else:
+            escs = [self._escape_identifier(s.encode()) for s in self._obj]
         return b".".join(escs)
+
+    def _escape_identifier(self, s: bytes) -> bytes:
+        """
+        Approximation of PQescapeIdentifier taking no connection.
+        """
+        return b'"' + s.replace(b'"', b'""') + b'"'
 
 
 class Literal(Composable):
@@ -393,7 +410,7 @@ class Literal(Composable):
 
     """
 
-    def as_bytes(self, context: Optional[AdaptContext]) -> bytes:
+    def as_bytes(self, context: AdaptContext | None = None) -> bytes:
         tx = Transformer.from_context(context)
         return tx.as_literal(self._obj)
 
@@ -426,7 +443,7 @@ class Placeholder(Composable):
 
     """
 
-    def __init__(self, name: str = "", format: Union[str, PyFormat] = PyFormat.AUTO):
+    def __init__(self, name: str = "", format: str | PyFormat = PyFormat.AUTO):
         super().__init__(name)
         if not isinstance(name, str):
             raise TypeError(f"expected string as name, got {name!r}")
@@ -452,11 +469,11 @@ class Placeholder(Composable):
 
         return f"{self.__class__.__name__}({', '.join(parts)})"
 
-    def as_string(self, context: Optional[AdaptContext]) -> str:
+    def as_string(self, context: AdaptContext | None = None) -> str:
         code = self._format.value
         return f"%({self._obj}){code}" if self._obj else f"%{code}"
 
-    def as_bytes(self, context: Optional[AdaptContext]) -> bytes:
+    def as_bytes(self, context: AdaptContext | None = None) -> bytes:
         conn = context.connection if context else None
         enc = conn_encoding(conn)
         return self.as_string(context).encode(enc)

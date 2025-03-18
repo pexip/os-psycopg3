@@ -1,2 +1,4 @@
 use-local-documentation.patch
 disable-postgresql-documentation-download.patch
+enable-pypy-usage.patch
+test-numpy-32bit-2.patch

@@ -4,22 +4,22 @@ Protocol objects representing different implementations of the same classes.
 
 # Copyright (C) 2020 The Psycopg Team
 
-from typing import Any, Callable, Generator, Mapping
-from typing import List, Optional, Sequence, Tuple, TypeVar, Union
-from typing import TYPE_CHECKING
-from typing_extensions import TypeAlias
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, Callable, Dict  # drop with Python 3.8
+from typing import Generator, Mapping, Protocol, Sequence, Union
 
 from . import pq
 from ._enums import PyFormat as PyFormat
-from ._compat import Protocol, LiteralString
+from ._compat import LiteralString, TypeAlias, TypeVar
 
 if TYPE_CHECKING:
-    from . import sql
+    from . import sql  # noqa: F401
     from .rows import Row, RowMaker
     from .pq.abc import PGresult
-    from .waiting import Wait, Ready
-    from .connection import BaseConnection
+    from .waiting import Ready, Wait  # noqa: F401
     from ._adapters_map import AdaptersMap
+    from ._connection_base import BaseConnection
 
 NoneType: type = type(None)
 
@@ -30,19 +30,23 @@ Query: TypeAlias = Union[LiteralString, bytes, "sql.SQL", "sql.Composed"]
 Params: TypeAlias = Union[Sequence[Any], Mapping[str, Any]]
 ConnectionType = TypeVar("ConnectionType", bound="BaseConnection[Any]")
 PipelineCommand: TypeAlias = Callable[[], None]
-DumperKey: TypeAlias = Union[type, Tuple["DumperKey", ...]]
+DumperKey: TypeAlias = Union[type, "tuple[DumperKey, ...]"]
+ConnParam: TypeAlias = Union[str, int, None]
+ConnDict: TypeAlias = Dict[str, ConnParam]
+ConnMapping: TypeAlias = Mapping[str, ConnParam]
+
 
 # Waiting protocol types
 
 RV = TypeVar("RV")
 
-PQGenConn: TypeAlias = Generator[Tuple[int, "Wait"], "Ready", RV]
+PQGenConn: TypeAlias = Generator["tuple[int, Wait]", "Ready | int", RV]
 """Generator for processes where the connection file number can change.
 
 This can happen in connection and reset, but not in normal querying.
 """
 
-PQGen: TypeAlias = Generator["Wait", "Ready", RV]
+PQGen: TypeAlias = Generator["Wait", "Ready | int", RV]
 """Generator for processes where the connection file number won't change.
 """
 
@@ -53,14 +57,13 @@ class WaitFunc(Protocol):
     """
 
     def __call__(
-        self, gen: PQGen[RV], fileno: int, timeout: Optional[float] = None
-    ) -> RV:
-        ...
+        self, gen: PQGen[RV], fileno: int, interval: float | None = None
+    ) -> RV: ...
 
 
 # Adaptation types
 
-DumpFunc: TypeAlias = Callable[[Any], Buffer]
+DumpFunc: TypeAlias = Callable[[Any], "Buffer | None"]
 LoadFunc: TypeAlias = Callable[[Buffer], Any]
 
 
@@ -77,12 +80,12 @@ class AdaptContext(Protocol):
     """
 
     @property
-    def adapters(self) -> "AdaptersMap":
+    def adapters(self) -> AdaptersMap:
         """The adapters configuration that this object uses."""
         ...
 
     @property
-    def connection(self) -> Optional["BaseConnection[Any]"]:
+    def connection(self) -> BaseConnection[Any] | None:
         """The connection used by this object, if available.
 
         :rtype: `~psycopg.Connection` or `~psycopg.AsyncConnection` or `!None`
@@ -106,10 +109,9 @@ class Dumper(Protocol):
     oid: int
     """The oid to pass to the server, if known; 0 otherwise (class attribute)."""
 
-    def __init__(self, cls: type, context: Optional[AdaptContext] = None):
-        ...
+    def __init__(self, cls: type, context: AdaptContext | None = None): ...
 
-    def dump(self, obj: Any) -> Buffer:
+    def dump(self, obj: Any) -> Buffer | None:
         """Convert the object `!obj` to PostgreSQL representation.
 
         :param obj: the object to convert.
@@ -159,7 +161,7 @@ class Dumper(Protocol):
         """
         ...
 
-    def upgrade(self, obj: Any, format: PyFormat) -> "Dumper":
+    def upgrade(self, obj: Any, format: PyFormat) -> Dumper:
         """Return a new dumper to manage `!obj`.
 
         :param obj: The object to convert
@@ -187,8 +189,7 @@ class Loader(Protocol):
     This is a class attribute.
     """
 
-    def __init__(self, oid: int, context: Optional[AdaptContext] = None):
-        ...
+    def __init__(self, oid: int, context: AdaptContext | None = None): ...
 
     def load(self, data: Buffer) -> Any:
         """
@@ -200,66 +201,50 @@ class Loader(Protocol):
 
 
 class Transformer(Protocol):
-    types: Optional[Tuple[int, ...]]
-    formats: Optional[List[pq.Format]]
+    types: tuple[int, ...] | None
+    formats: list[pq.Format] | None
 
-    def __init__(self, context: Optional[AdaptContext] = None):
-        ...
+    def __init__(self, context: AdaptContext | None = None): ...
 
     @classmethod
-    def from_context(cls, context: Optional[AdaptContext]) -> "Transformer":
-        ...
+    def from_context(cls, context: AdaptContext | None) -> Transformer: ...
 
     @property
-    def connection(self) -> Optional["BaseConnection[Any]"]:
-        ...
+    def connection(self) -> BaseConnection[Any] | None: ...
 
     @property
-    def encoding(self) -> str:
-        ...
+    def encoding(self) -> str: ...
 
     @property
-    def adapters(self) -> "AdaptersMap":
-        ...
+    def adapters(self) -> AdaptersMap: ...
 
     @property
-    def pgresult(self) -> Optional["PGresult"]:
-        ...
+    def pgresult(self) -> PGresult | None: ...
 
     def set_pgresult(
         self,
-        result: Optional["PGresult"],
+        result: PGresult | None,
         *,
         set_loaders: bool = True,
-        format: Optional[pq.Format] = None
-    ) -> None:
-        ...
+        format: pq.Format | None = None,
+    ) -> None: ...
 
-    def set_dumper_types(self, types: Sequence[int], format: pq.Format) -> None:
-        ...
+    def set_dumper_types(self, types: Sequence[int], format: pq.Format) -> None: ...
 
-    def set_loader_types(self, types: Sequence[int], format: pq.Format) -> None:
-        ...
+    def set_loader_types(self, types: Sequence[int], format: pq.Format) -> None: ...
 
     def dump_sequence(
         self, params: Sequence[Any], formats: Sequence[PyFormat]
-    ) -> Sequence[Optional[Buffer]]:
-        ...
+    ) -> Sequence[Buffer | None]: ...
 
-    def as_literal(self, obj: Any) -> bytes:
-        ...
+    def as_literal(self, obj: Any) -> bytes: ...
 
-    def get_dumper(self, obj: Any, format: PyFormat) -> Dumper:
-        ...
+    def get_dumper(self, obj: Any, format: PyFormat) -> Dumper: ...
 
-    def load_rows(self, row0: int, row1: int, make_row: "RowMaker[Row]") -> List["Row"]:
-        ...
+    def load_rows(self, row0: int, row1: int, make_row: RowMaker[Row]) -> list[Row]: ...
 
-    def load_row(self, row: int, make_row: "RowMaker[Row]") -> Optional["Row"]:
-        ...
+    def load_row(self, row: int, make_row: RowMaker[Row]) -> Row | None: ...
 
-    def load_sequence(self, record: Sequence[Optional[Buffer]]) -> Tuple[Any, ...]:
-        ...
+    def load_sequence(self, record: Sequence[Buffer | None]) -> tuple[Any, ...]: ...
 
-    def get_loader(self, oid: int, format: pq.Format) -> Loader:
-        ...
+    def get_loader(self, oid: int, format: pq.Format) -> Loader: ...

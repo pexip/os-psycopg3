@@ -1,4 +1,5 @@
 import ctypes
+
 import pytest
 
 from psycopg import pq
@@ -48,6 +49,15 @@ def test_error_message(pgconn):
     assert b"wat" in res.error_message
     res.clear()
     assert res.error_message == b""
+
+
+def test_get_error_message(pgconn):
+    res = pgconn.exec_(b"select 1")
+    assert res.get_error_message() == "no error details available"
+    res = pgconn.exec_(b"select wat")
+    assert "wat" in res.get_error_message()
+    res.clear()
+    assert res.get_error_message() == "no error details available"
 
 
 def test_error_field(pgconn):

@@ -2,17 +2,17 @@
 Adapters for PostGIS geometries
 """
 
-from typing import Optional
+from __future__ import annotations
 
 from .. import postgres
+from ..pq import Format
 from ..abc import AdaptContext, Buffer
 from ..adapt import Dumper, Loader
-from ..pq import Format
+from .._compat import cache
 from .._typeinfo import TypeInfo
 
-
 try:
-    from shapely.wkb import loads, dumps
+    from shapely.wkb import dumps, loads
     from shapely.geometry.base import BaseGeometry
 
 except ImportError:
@@ -25,14 +25,14 @@ except ImportError:
 class GeometryBinaryLoader(Loader):
     format = Format.BINARY
 
-    def load(self, data: Buffer) -> "BaseGeometry":
+    def load(self, data: Buffer) -> BaseGeometry:
         if not isinstance(data, bytes):
             data = bytes(data)
         return loads(data)
 
 
 class GeometryLoader(Loader):
-    def load(self, data: Buffer) -> "BaseGeometry":
+    def load(self, data: Buffer) -> BaseGeometry:
         # it's a hex string in binary
         if isinstance(data, memoryview):
             data = bytes(data)
@@ -42,16 +42,16 @@ class GeometryLoader(Loader):
 class BaseGeometryBinaryDumper(Dumper):
     format = Format.BINARY
 
-    def dump(self, obj: "BaseGeometry") -> bytes:
+    def dump(self, obj: BaseGeometry) -> Buffer | None:
         return dumps(obj)  # type: ignore
 
 
 class BaseGeometryDumper(Dumper):
-    def dump(self, obj: "BaseGeometry") -> bytes:
+    def dump(self, obj: BaseGeometry) -> Buffer | None:
         return dumps(obj, hex=True).encode()  # type: ignore
 
 
-def register_shapely(info: TypeInfo, context: Optional[AdaptContext] = None) -> None:
+def register_shapely(info: TypeInfo, context: AdaptContext | None = None) -> None:
     """Register Shapely dumper and loaders."""
 
     # A friendly error warning instead of an AttributeError in case fetch()
@@ -62,14 +62,28 @@ def register_shapely(info: TypeInfo, context: Optional[AdaptContext] = None) -> 
     info.register(context)
     adapters = context.adapters if context else postgres.adapters
 
-    class GeometryDumper(BaseGeometryDumper):
-        oid = info.oid
-
-    class GeometryBinaryDumper(BaseGeometryBinaryDumper):
-        oid = info.oid
-
     adapters.register_loader(info.oid, GeometryBinaryLoader)
     adapters.register_loader(info.oid, GeometryLoader)
     # Default binary dump
-    adapters.register_dumper(BaseGeometry, GeometryDumper)
-    adapters.register_dumper(BaseGeometry, GeometryBinaryDumper)
+    adapters.register_dumper(BaseGeometry, _make_dumper(info.oid))
+    adapters.register_dumper(BaseGeometry, _make_binary_dumper(info.oid))
+
+
+# Cache all dynamically-generated types to avoid leaks in case the types
+# cannot be GC'd.
+
+
+@cache
+def _make_dumper(oid_in: int) -> type[BaseGeometryDumper]:
+    class GeometryDumper(BaseGeometryDumper):
+        oid = oid_in
+
+    return GeometryDumper
+
+
+@cache
+def _make_binary_dumper(oid_in: int) -> type[BaseGeometryBinaryDumper]:
+    class GeometryBinaryDumper(BaseGeometryBinaryDumper):
+        oid = oid_in
+
+    return GeometryBinaryDumper

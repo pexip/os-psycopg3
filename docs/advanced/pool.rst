@@ -21,17 +21,131 @@ the pool operations.
    :ref:`pool-installation`.
 
 
-Pool life cycle
----------------
+Basic connection pool usage
+---------------------------
 
-A simple way to use the pool is to create a single instance of it, as a
-global object, and to use this object in the rest of the program, allowing
-other functions, modules, threads to use it::
+A `ConnectionPool` object can be used to request connections from multiple
+concurrent threads. A simple and safe way to use it is as a *context manager*.
+Within the `!with` block, you can request the pool a connection using the
+`~ConnectionPool.connection()` method, and use it as a context manager too::
+
+    with ConnectionPool(...) as pool:
+        with pool.connection() as conn:
+            conn.execute("SELECT something FROM somewhere ...")
+
+            with conn.cursor() as cur:
+                cur.execute("SELECT something else...")
+
+        # At the end of the `connection()` context, the transaction is committed
+        # or rolled back, and the connection returned to the pool
+
+    # At the end of the pool context, all the resources used by the pool are released
+
+The `!connection()` context behaves like the `~psycopg.Connection` object
+context: at the end of the block, if there is a transaction open, it will be
+committed if the context is exited normally, or rolled back if the context is
+exited with an exception. See :ref:`transaction-context` for details.
+
+The pool manages a certain amount of connections (between `!min_size` and
+`!max_size`). If the pool has a connection ready in its state, it is served
+immediately to the `~connection()` caller, otherwise the caller is put in a
+queue and is served a connection as soon as it's available.
+
+If instead of threads your application uses async code you can use the
+`AsyncConnectionPool` instead and use the `!async` and `!await` keywords with
+the methods requiring them::
+
+    async with AsyncConnectionPool(...) as pool:
+        async with pool.connection() as conn:
+            await conn.execute("SELECT something FROM somewhere ...")
+
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT something else...")
+
+
+Pool startup check
+------------------
+
+After a pool is open, it can accept new clients even if it doesn't have
+`!min_size` connections ready yet. However, if the application is
+misconfigured and cannot connect to the database server, the clients will
+block until failing with a `PoolTimeout`.
+
+If you want to make sure early in the application lifetime that the
+environment is well configured, you can use the `~ConnectionPool.wait()` method
+after opening the pool, which will block until `!min_size` connections have
+been acquired, or fail with a `!PoolTimeout` if it doesn't happen in time::
+
+    with ConnectionPool(...) as pool:
+        pool.wait()
+        use_the(pool)
+
+
+Connections life cycle
+----------------------
+
+When the pool needs a new connection (because it was just opened, or because
+an existing connection was closed, or because a spike of activity requires new
+connections), it uses a background pool worker to prepare it in the background:
+
+- the worker creates a connection according to the parameters `!conninfo`,
+  `!kwargs`, and `!connection_class` passed to `ConnectionPool` constructor,
+  calling something similar to :samp:`{connection_class}({conninfo},
+  **{kwargs})`;
+
+- if a `!configure` callback was provided, it is called with the new connection
+  as parameter. This can be used, for instance, to configure the connection
+  adapters.
+
+Once the connection is prepared, it is stored in the pool state, or it is
+passed to a client if someone is already in the requests queue.
+
+When a client asks for a connection (typically entering a
+`~ConnectionPool.connection()` context):
+
+- if there is a connection available in the pool, it is served to the client
+  immediately;
+
+- if no connection is available, the client is put in a queue, and will be
+  served a connection once one becomes available (because returned by another
+  client or because a new one is created);
+
+- if a `!check` callback was provided, it is called on the connection before
+  passing the connection to the client. If the check fails, a new connection
+  will be obtained.
+
+When a client has finished to use the connection (typically at the end of the
+context stared by `~ConnectionPool.connection()`):
+
+- if there is a transaction open, the transaction is committed (if the block
+  is exited normally) or rolled back (if it is exited with an exception);
+
+- if a `!reset` callback was provided, the connection is passed to it, to
+  allow application-specific cleanup if needed;
+
+- if, along this process, the connection is found in broken state, or if it
+  passed the `!max_lifetime` configured at pool creation, it is discarded and
+  a new connection is requested to a worker;
+
+- the connection is finally returned to the pool, or, if there are clients in
+  the queue, to the first client waiting.
+
+
+Other ways to create a pool
+---------------------------
+
+Using the pool as a context manager is not mandatory: pools can be created and
+used without using the context pattern. However, using the context is the
+safest way to manage its resources.
+
+When the pool is created, if its `!open` parameter is `!True`, the connection
+process starts immediately. In a simple program you might create a pool as a
+global object and use it from the rest of your code::
 
     # module db.py in your program
     from psycopg_pool import ConnectionPool
 
-    pool = ConnectionPool(conninfo, **kwargs)
+    pool = ConnectionPool(..., open=True, ...)
     # the pool starts connecting immediately.
 
     # in another module
@@ -41,104 +155,89 @@ other functions, modules, threads to use it::
         with pool.connection() as conn:
             conn.execute(...)
 
-Ideally you may want to call `~ConnectionPool.close()` when the use of the
-pool is finished. Failing to call `!close()` at the end of the program is not
-terribly bad: probably it will just result in some warnings printed on stderr.
-However, if you think that it's sloppy, you could use the `atexit` module to
-have `!close()` called at the end of the program.
+Using this pattern, the pool will start the connection process already at
+import time. If that's too early, and you want to delay opening connections
+until the application is ready, you can specify to create a closed pool and
+call the `~ConnectionPool.open()` method.
 
-If you want to avoid starting to connect to the database at import time, and
-want to wait for the application to be ready, you can create the pool using
-`!open=False`, and call the `~ConnectionPool.open()` and
-`~ConnectionPool.close()` methods when the conditions are right. Certain
-frameworks provide callbacks triggered when the program is started and stopped
-(for instance `FastAPI startup/shutdown events`__): they are perfect to
-initiate and terminate the pool operations::
+If you are not using the pool as context manager, you are advised to call the
+`~ConnectionPool.close()` method on program exit: on some Python versions this
+might cause a program exit delay. How to ensure it depends on the way you are
+writing your program. One simple method is to use the `atexit` module::
 
-    pool = ConnectionPool(conninfo, open=False, **kwargs)
+    atexit.register(pool.close)
 
-    @app.on_event("startup")
-    def open_pool():
-        pool.open()
+Other frameworks might provide suitable hooks. For example, in FastAPI, you
+can use a `lifespan`__ function::
 
-    @app.on_event("shutdown")
-    def close_pool():
-        pool.close()
+    pool = AsyncConnectionPool(..., open=False, ...)
 
-.. __: https://fastapi.tiangolo.com/advanced/events/#events-startup-shutdown
+    @asynccontextmanager
+    async def lifespan(instance: FastAPI):
+        await pool.open()
+        yield
+        await pool.close()
 
-Creating a single pool as a global variable is not the mandatory use: your
-program can create more than one pool, which might be useful to connect to
-more than one database, or to provide different types of connections, for
-instance to provide separate read/write and read-only connections. The pool
-also acts as a context manager and is open and closed, if necessary, on
-entering and exiting the context block::
+    app = FastAPI(lifespan=lifespan)
 
-    from psycopg_pool import ConnectionPool
+.. __: https://fastapi.tiangolo.com/advanced/events/#lifespan
 
-    with ConnectionPool(conninfo, **kwargs) as pool:
-        run_app(pool)
+.. warning::
+    The current default for the `!open` parameter is `!True`. However this
+    proved to be not the best idea and, in future releases, the default might
+    be changed to `!False`. As a consequence, if you rely on the pool to be
+    opened on creation, you should specify `!open=True` explicitly.
 
-    # the pool is now closed
-
-When the pool is open, the pool's background workers start creating the
-requested `!min_size` connections, while the constructor (or the `!open()`
-method) returns immediately. This allows the program some leeway to start
-before the target database is up and running.  However, if your application is
-misconfigured, or the network is down, it means that the program will be able
-to start, but the threads requesting a connection will fail with a
-`PoolTimeout` only after the timeout on `~ConnectionPool.connection()` is
-expired. If this behaviour is not desirable (and you prefer your program to
-crash hard and fast, if the surrounding conditions are not right, because
-something else will respawn it) you should call the `~ConnectionPool.wait()`
-method after creating the pool, or call `!open(wait=True)`: these methods will
-block until the pool is full, or will raise a `PoolTimeout` exception if the
-pool isn't ready within the allocated time.
+.. warning::
+    Opening an async pool in the constructor is deprecated and will be removed
+    in the future. When using `AsyncConnectionPool` you should call `await
+    pool.open()` or `async with ... as pool` explicitly.
 
 
-Connections life cycle
-----------------------
+.. _null-pool:
 
-The pool background workers create connections according to the parameters
-`!conninfo`, `!kwargs`, and `!connection_class` passed to `ConnectionPool`
-constructor, invoking something like :samp:`{connection_class}({conninfo},
-**{kwargs})`. Once a connection is created it is also passed to the
-`!configure()` callback, if provided, after which it is put in the pool (or
-passed to a client requesting it, if someone is already knocking at the door).
+Null connection pools
+---------------------
 
-If a connection expires (it passes `!max_lifetime`), or is returned to the pool
-in broken state, or is found closed by `~ConnectionPool.check()`), then the
-pool will dispose of it and will start a new connection attempt in the
-background.
+.. versionadded:: 3.1
 
+Sometimes you may want leave the choice of using or not using a connection
+pool as a configuration parameter of your application. For instance, you might
+want to use a pool if you are deploying a "large instance" of your application
+and can dedicate it a handful of connections; conversely you might not want to
+use it if you deploy the application in several instances, behind a load
+balancer, and/or using an external connection pool process such as PgBouncer.
 
-Using connections from the pool
--------------------------------
+Switching between using or not using a pool requires some code change, because
+the `ConnectionPool` API is different from the normal `~psycopg.connect()`
+function and because the pool can perform additional connection configuration
+(in the `!configure` parameter) that, if the pool is removed, should be
+performed in some different code path of your application.
 
-The pool can be used to request connections from multiple threads or
-concurrent tasks - it is hardly useful otherwise! If more connections than the
-ones available in the pool are requested, the requesting threads are queued
-and are served a connection as soon as one is available, either because
-another client has finished using it or because the pool is allowed to grow
-(when `!max_size` > `!min_size`) and a new connection is ready.
+The `!psycopg_pool` 3.1 package introduces the `NullConnectionPool` class.
+This class has the same interface, and largely the same behaviour, of the
+`!ConnectionPool`, but doesn't create any connection beforehand. When a
+connection is returned, unless there are other clients already waiting, it
+is closed immediately and not kept in the pool state.
 
-The main way to use the pool is to obtain a connection using the
-`~ConnectionPool.connection()` context, which returns a `~psycopg.Connection`
-or subclass::
+A null pool is not only a configuration convenience, but can also be used to
+regulate the access to the server by a client program. If `!max_size` is set to
+a value greater than 0, the pool will make sure that no more than `!max_size`
+connections are created at any given time. If more clients ask for further
+connections, they will be queued and served a connection as soon as a previous
+client has finished using it, like for the basic pool. Other mechanisms to
+throttle client requests (such as `!timeout` or `!max_waiting`) are respected
+too.
 
-    with my_pool.connection() as conn:
-        conn.execute("what you want")
+.. note::
 
-The `!connection()` context behaves like the `~psycopg.Connection` object
-context: at the end of the block, if there is a transaction open, it will be
-committed, or rolled back if the context is exited with as exception.
+    Queued clients will be handed an already established connection, as soon
+    as a previous client has finished using it (and after the pool has
+    returned it to idle state and called `!reset()` on it, if necessary).
 
-At the end of the block the connection is returned to the pool and shouldn't
-be used anymore by the code which obtained it. If a `!reset()` function is
-specified in the pool constructor, it is called on the connection before
-returning it to the pool. Note that the `!reset()` function is called in a
-worker thread, so that the thread which used the connection can keep its
-execution without being slowed down by it.
+Because normally (i.e. unless queued) every client will be served a new
+connection, the time to obtain the connection is paid by the waiting client;
+background workers are not normally involved in obtaining new connections.
 
 
 Pool connection and sizing
@@ -188,101 +287,101 @@ to tune the configuration parameters. The size of the pool can also be changed
 at runtime using the `~ConnectionPool.resize()` method.
 
 
-.. _null-pool:
-
-Null connection pools
----------------------
-
-.. versionadded:: 3.1
-
-Sometimes you may want leave the choice of using or not using a connection
-pool as a configuration parameter of your application. For instance, you might
-want to use a pool if you are deploying a "large instance" of your application
-and can dedicate it a handful of connections; conversely you might not want to
-use it if you deploy the application in several instances, behind a load
-balancer, and/or using an external connection pool process such as PgBouncer.
-
-Switching between using or not using a pool requires some code change, because
-the `ConnectionPool` API is different from the normal `~psycopg.connect()`
-function and because the pool can perform additional connection configuration
-(in the `!configure` parameter) that, if the pool is removed, should be
-performed in some different code path of your application.
-
-The `!psycopg_pool` 3.1 package introduces the `NullConnectionPool` class.
-This class has the same interface, and largely the same behaviour, of the
-`!ConnectionPool`, but doesn't create any connection beforehand. When a
-connection is returned, unless there are other clients already waiting, it
-is closed immediately and not kept in the pool state.
-
-A null pool is not only a configuration convenience, but can also be used to
-regulate the access to the server by a client program. If `!max_size` is set to
-a value greater than 0, the pool will make sure that no more than `!max_size`
-connections are created at any given time. If more clients ask for further
-connections, they will be queued and served a connection as soon as a previous
-client has finished using it, like for the basic pool. Other mechanisms to
-throttle client requests (such as `!timeout` or `!max_waiting`) are respected
-too.
-
-.. note::
-
-    Queued clients will be handed an already established connection, as soon
-    as a previous client has finished using it (and after the pool has
-    returned it to idle state and called `!reset()` on it, if necessary).
-
-Because normally (i.e. unless queued) every client will be served a new
-connection, the time to obtain the connection is paid by the waiting client;
-background workers are not normally involved in obtaining new connections.
-
-
 Connection quality
 ------------------
 
-The state of the connection is verified when a connection is returned to the
-pool: if a connection is broken during its usage it will be discarded on
-return and a new connection will be created.
+.. versionadded:: 3.2
 
-.. warning::
+The pool doesn't actively check the state of the connections held in its
+state. This means that, if communication with the server is lost, or if a
+connection is closed for other reasons (such as a server configured with an
+`idle_session_timeout`__ killing connections that haven't been used for some
+time), the application might be served a connection in broken state.
 
-    The health of the connection is not checked when the pool gives it to a
-    client.
+.. __: https://www.postgresql.org/docs/current/runtime-config-client.html#GUC-IDLE-SESSION-TIMEOUT
 
-Why not? Because doing so would require an extra network roundtrip: we want to
-save you from its latency. Before getting too angry about it, just think that
-the connection can be lost any moment while your program is using it. As your
-program should already be able to cope with a loss of a connection during its
-process, it should be able to tolerate to be served a broken connection:
-unpleasant but not the end of the world.
+If you want to configure the pool to check the state of the connection, and
+make sure that the application always receives a working connection, you can
+configure a `!check` callback. The callback can perform some operation to
+verify the quality of the connection and, if it completes without raising
+exception, the connection is passed to the client. This, of course, will imply
+some network time that the pool client will have to pay.
 
-.. warning::
+A simple implementation is available as the static method
+`ConnectionPool.check_connection`, which can be used as::
 
-    The health of the connection is not checked when the connection is in the
-    pool.
+    with ConnectionPool(
+        ..., check=ConnectionPool.check_connection, ...
+    ) as pool:
+        ...
 
-Does the pool keep a watchful eye on the quality of the connections inside it?
-No, it doesn't. Why not? Because you will do it for us! Your program is only
-a big ruse to make sure the connections are still alive...
 
-Not (entirely) trolling: if you are using a connection pool, we assume that
-you are using and returning connections at a good pace. If the pool had to
-check for the quality of a broken connection before your program notices it,
-it should be polling each connection even faster than your program uses them.
-Your database server wouldn't be amused...
+.. _pool-logging:
 
-Can you do something better than that? Of course you can, there is always a
-better way than polling. You can use the same recipe of :ref:`disconnections`,
-reserving a connection and using a thread to monitor for any activity
-happening on it. If any activity is detected, you can call the pool
-`~ConnectionPool.check()` method, which will run a quick check on each
-connection in the pool, removing the ones found in broken state, and using the
-background workers to replace them with fresh ones.
+Pool operations logging
+-----------------------
 
-If you set up a similar check in your program, in case the database connection
-is temporarily lost, we cannot do anything for the threads which had taken
-already a connection from the pool, but no other thread should be served a
-broken connection, because `!check()` would empty the pool and refill it with
-working connections, as soon as they are available.
+The pool uses the `logging` module to log some key operations to the
+``psycopg.pool`` logger. If you are trying to debug the pool behaviour you may
+try to log at least the ``INFO`` operations on that logger.
 
-Faster than you can say poll. Or pool.
+For example, the script:
+
+.. code:: python
+
+    import time
+    import logging
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from psycopg_pool import ConnectionPool
+
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
+    logging.getLogger("psycopg.pool").setLevel(logging.INFO)
+
+    pool = ConnectionPool(min_size=2)
+    pool.wait()
+    logging.info("pool ready")
+
+    def square(n):
+        with pool.connection() as conn:
+            time.sleep(1)
+            rec = conn.execute("SELECT %s * %s", (n, n)).fetchone()
+            logging.info(f"The square of {n} is {rec[0]}.")
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [executor.submit(square, n) for n in range(4)]
+        for future in as_completed(futures):
+            future.result()
+
+might print something like:
+
+.. code:: text
+
+    2023-09-20 11:02:39,718 INFO psycopg.pool: waiting for pool 'pool-1' initialization
+    2023-09-20 11:02:39,720 INFO psycopg.pool: adding new connection to the pool
+    2023-09-20 11:02:39,720 INFO psycopg.pool: adding new connection to the pool
+    2023-09-20 11:02:39,720 INFO psycopg.pool: pool 'pool-1' is ready to use
+    2023-09-20 11:02:39,720 INFO root: pool ready
+    2023-09-20 11:02:39,721 INFO psycopg.pool: connection requested from 'pool-1'
+    2023-09-20 11:02:39,721 INFO psycopg.pool: connection given by 'pool-1'
+    2023-09-20 11:02:39,721 INFO psycopg.pool: connection requested from 'pool-1'
+    2023-09-20 11:02:39,721 INFO psycopg.pool: connection given by 'pool-1'
+    2023-09-20 11:02:39,721 INFO psycopg.pool: connection requested from 'pool-1'
+    2023-09-20 11:02:39,722 INFO psycopg.pool: connection requested from 'pool-1'
+    2023-09-20 11:02:40,724 INFO root: The square of 0 is 0.
+    2023-09-20 11:02:40,724 INFO root: The square of 1 is 1.
+    2023-09-20 11:02:40,725 INFO psycopg.pool: returning connection to 'pool-1'
+    2023-09-20 11:02:40,725 INFO psycopg.pool: connection given by 'pool-1'
+    2023-09-20 11:02:40,725 INFO psycopg.pool: returning connection to 'pool-1'
+    2023-09-20 11:02:40,726 INFO psycopg.pool: connection given by 'pool-1'
+    2023-09-20 11:02:41,728 INFO root: The square of 3 is 9.
+    2023-09-20 11:02:41,729 INFO root: The square of 2 is 4.
+    2023-09-20 11:02:41,729 INFO psycopg.pool: returning connection to 'pool-1'
+    2023-09-20 11:02:41,730 INFO psycopg.pool: returning connection to 'pool-1'
+
+Please do not rely on the messages generated to remain unchanged across
+versions: they don't constitute a stable interface.
 
 
 .. _pool-stats:
@@ -328,5 +427,5 @@ Metric                  Meaning
                         server
  ``connections_errors`` Number of failed connection attempts
  ``connections_lost``   Number of connections lost identified by
-                        `~ConnectionPool.check()`
+                        `~ConnectionPool.check()` or by the `!check` callback
 ======================= =====================================================

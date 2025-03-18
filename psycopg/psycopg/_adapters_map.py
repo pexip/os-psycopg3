@@ -4,18 +4,20 @@ Mapping from types/oids to Dumpers/Loaders
 
 # Copyright (C) 2020 The Psycopg Team
 
-from typing import Any, Dict, List, Optional, Type, TypeVar, Union
-from typing import cast, TYPE_CHECKING
+from __future__ import annotations
 
-from . import pq
+from typing import TYPE_CHECKING, Any, cast
+
 from . import errors as e
+from . import pq
 from .abc import Dumper, Loader
 from ._enums import PyFormat as PyFormat
+from ._compat import TypeVar
 from ._cmodule import _psycopg
 from ._typeinfo import TypesRegistry
 
 if TYPE_CHECKING:
-    from .connection import BaseConnection
+    from ._connection_base import BaseConnection
 
 RV = TypeVar("RV")
 
@@ -59,17 +61,17 @@ class AdaptersMap:
 
     types: TypesRegistry
 
-    _dumpers: Dict[PyFormat, Dict[Union[type, str], Type[Dumper]]]
-    _dumpers_by_oid: List[Dict[int, Type[Dumper]]]
-    _loaders: List[Dict[int, Type[Loader]]]
+    _dumpers: dict[PyFormat, dict[type | str, type[Dumper]]]
+    _dumpers_by_oid: list[dict[int, type[Dumper]]]
+    _loaders: list[dict[int, type[Loader]]]
 
     # Record if a dumper or loader has an optimised version.
-    _optimised: Dict[type, type] = {}
+    _optimised: dict[type, type] = {}
 
     def __init__(
         self,
-        template: Optional["AdaptersMap"] = None,
-        types: Optional[TypesRegistry] = None,
+        template: AdaptersMap | None = None,
+        types: TypesRegistry | None = None,
     ):
         if template:
             self._dumpers = template._dumpers.copy()
@@ -100,16 +102,14 @@ class AdaptersMap:
 
     # implement the AdaptContext protocol too
     @property
-    def adapters(self) -> "AdaptersMap":
+    def adapters(self) -> AdaptersMap:
         return self
 
     @property
-    def connection(self) -> Optional["BaseConnection[Any]"]:
+    def connection(self) -> BaseConnection[Any] | None:
         return None
 
-    def register_dumper(
-        self, cls: Union[type, str, None], dumper: Type[Dumper]
-    ) -> None:
+    def register_dumper(self, cls: type | str | None, dumper: type[Dumper]) -> None:
         """
         Configure the context to use `!dumper` to convert objects of type `!cls`.
 
@@ -160,7 +160,7 @@ class AdaptersMap:
 
             self._dumpers_by_oid[dumper.format][dumper.oid] = dumper
 
-    def register_loader(self, oid: Union[int, str], loader: Type["Loader"]) -> None:
+    def register_loader(self, oid: int | str, loader: type[Loader]) -> None:
         """
         Configure the context to use `!loader` to convert data of oid `!oid`.
 
@@ -168,7 +168,7 @@ class AdaptersMap:
         :param loader: The loar to register for `!oid`.
 
         If `oid` is specified as string, it refers to a type name, which is
-        looked up in the `types` registry. `
+        looked up in the `types` registry.
 
         """
         if isinstance(oid, str):
@@ -186,7 +186,7 @@ class AdaptersMap:
 
         self._loaders[fmt][oid] = loader
 
-    def get_dumper(self, cls: type, format: PyFormat) -> Type["Dumper"]:
+    def get_dumper(self, cls: type, format: PyFormat) -> type[Dumper]:
         """
         Return the dumper class for the given type and format.
 
@@ -225,7 +225,7 @@ class AdaptersMap:
             f" (format: {format.name})"
         )
 
-    def get_dumper_by_oid(self, oid: int, format: pq.Format) -> Type["Dumper"]:
+    def get_dumper_by_oid(self, oid: int, format: pq.Format) -> type[Dumper]:
         """
         Return the dumper class for the given oid and format.
 
@@ -255,7 +255,7 @@ class AdaptersMap:
                 )
             raise e.ProgrammingError(msg)
 
-    def get_loader(self, oid: int, format: pq.Format) -> Optional[Type["Loader"]]:
+    def get_loader(self, oid: int, format: pq.Format) -> type[Loader] | None:
         """
         Return the loader class for the given oid and format.
 
@@ -267,7 +267,7 @@ class AdaptersMap:
         return self._loaders[format].get(oid)
 
     @classmethod
-    def _get_optimised(self, cls: Type[RV]) -> Type[RV]:
+    def _get_optimised(self, cls: type[RV]) -> type[RV]:
         """Return the optimised version of a Dumper or Loader class.
 
         Return the input class itself if there is no optimised version.
@@ -282,7 +282,7 @@ class AdaptersMap:
         from psycopg import types
 
         if cls.__module__.startswith(types.__name__):
-            new = cast(Type[RV], getattr(_psycopg, cls.__name__, None))
+            new = cast("type[RV]", getattr(_psycopg, cls.__name__, None))
             if new:
                 self._optimised[cls] = new
                 return new

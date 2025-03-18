@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-r"""Add or edit github users in the backers file
-"""
+# mypy: ignore-errors
+"""Add or edit github users in the backers file"""
 
 import sys
 import logging
-import requests
 from pathlib import Path
+
+import requests
 from ruamel.yaml import YAML  # pip install ruamel.yaml
 
 logger = logging.getLogger()

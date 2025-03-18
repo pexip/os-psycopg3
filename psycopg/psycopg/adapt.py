@@ -4,18 +4,21 @@ Entry point into the adaptation system.
 
 # Copyright (C) 2020 The Psycopg Team
 
-from abc import ABC, abstractmethod
-from typing import Any, Optional, Type, TYPE_CHECKING
+from __future__ import annotations
 
-from . import pq, abc
-from . import _adapters_map
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, Any
+
+from . import abc, pq
+
+# Objects exported here
 from ._enums import PyFormat as PyFormat
-from ._cmodule import _psycopg
+from ._transformer import Transformer as Transformer
+from ._adapters_map import AdaptersMap as AdaptersMap  # noqa: F401 # reexport
 
 if TYPE_CHECKING:
-    from .connection import BaseConnection
+    from ._connection_base import BaseConnection
 
-AdaptersMap = _adapters_map.AdaptersMap
 Buffer = abc.Buffer
 
 ORD_BS = ord("\\")
@@ -32,11 +35,10 @@ class Dumper(abc.Dumper, ABC):
     format: pq.Format = pq.Format.TEXT
     """The format of the data dumped."""
 
-    def __init__(self, cls: type, context: Optional[abc.AdaptContext] = None):
+    def __init__(self, cls: type, context: abc.AdaptContext | None = None):
         self.cls = cls
-        self.connection: Optional["BaseConnection[Any]"] = (
-            context.connection if context else None
-        )
+        self.connection: BaseConnection[Any] | None
+        self.connection = context.connection if context else None
 
     def __repr__(self) -> str:
         return (
@@ -45,8 +47,7 @@ class Dumper(abc.Dumper, ABC):
         )
 
     @abstractmethod
-    def dump(self, obj: Any) -> Buffer:
-        ...
+    def dump(self, obj: Any) -> Buffer | None: ...
 
     def quote(self, obj: Any) -> Buffer:
         """
@@ -56,6 +57,8 @@ class Dumper(abc.Dumper, ABC):
         subclass.
         """
         value = self.dump(obj)
+        if value is None:
+            return b"NULL"
 
         if self.connection:
             esc = pq.Escaping(self.connection.pgconn)
@@ -104,7 +107,7 @@ class Dumper(abc.Dumper, ABC):
         """
         return self.cls
 
-    def upgrade(self, obj: Any, format: PyFormat) -> "Dumper":
+    def upgrade(self, obj: Any, format: PyFormat) -> Dumper:
         """
         Implementation of the `~psycopg.abc.Dumper.upgrade()` member of the
         `~psycopg.abc.Dumper` protocol. Look at its definition for details.
@@ -123,11 +126,10 @@ class Loader(abc.Loader, ABC):
     format: pq.Format = pq.Format.TEXT
     """The format of the data loaded."""
 
-    def __init__(self, oid: int, context: Optional[abc.AdaptContext] = None):
+    def __init__(self, oid: int, context: abc.AdaptContext | None = None):
         self.oid = oid
-        self.connection: Optional["BaseConnection[Any]"] = (
-            context.connection if context else None
-        )
+        self.connection: BaseConnection[Any] | None
+        self.connection = context.connection if context else None
 
     @abstractmethod
     def load(self, data: Buffer) -> Any:
@@ -135,21 +137,10 @@ class Loader(abc.Loader, ABC):
         ...
 
 
-Transformer: Type["abc.Transformer"]
-
-# Override it with fast object if available
-if _psycopg:
-    Transformer = _psycopg.Transformer
-else:
-    from . import _transform
-
-    Transformer = _transform.Transformer
-
-
 class RecursiveDumper(Dumper):
     """Dumper with a transformer to help dumping recursive types."""
 
-    def __init__(self, cls: type, context: Optional[abc.AdaptContext] = None):
+    def __init__(self, cls: type, context: abc.AdaptContext | None = None):
         super().__init__(cls, context)
         self._tx = Transformer.from_context(context)
 
@@ -157,6 +148,6 @@ class RecursiveDumper(Dumper):
 class RecursiveLoader(Loader):
     """Loader with a transformer to help loading recursive types."""
 
-    def __init__(self, oid: int, context: Optional[abc.AdaptContext] = None):
+    def __init__(self, oid: int, context: abc.AdaptContext | None = None):
         super().__init__(oid, context)
         self._tx = Transformer.from_context(context)
