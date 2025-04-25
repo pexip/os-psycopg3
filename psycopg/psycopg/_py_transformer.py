@@ -1,31 +1,37 @@
 """
 Helper object to transform values between Python and PostgreSQL
+
+Python implementation of the object. Use the `_transformer module to import
+the right implementation (Python or C). The public place where the object
+is exported is `psycopg.adapt` (which we may not use to avoid circular
+dependencies problems).
 """
 
 # Copyright (C) 2020 The Psycopg Team
 
-from typing import Any, Dict, List, Optional, Sequence, Tuple
-from typing import DefaultDict, TYPE_CHECKING
-from collections import defaultdict
-from typing_extensions import TypeAlias
+from __future__ import annotations
 
-from . import pq
-from . import postgres
+from typing import TYPE_CHECKING, Any, DefaultDict, Sequence
+from collections import defaultdict
+
+from . import abc
 from . import errors as e
-from .abc import Buffer, LoadFunc, AdaptContext, PyFormat, DumperKey, NoneType
+from . import pq
+from .abc import AdaptContext, Buffer, LoadFunc, NoneType, PyFormat
 from .rows import Row, RowMaker
-from .postgres import INVALID_OID, TEXT_OID
-from ._encodings import pgconn_encoding
+from ._oids import INVALID_OID, TEXT_OID
+from ._compat import TypeAlias
+from ._encodings import conn_encoding
 
 if TYPE_CHECKING:
-    from .abc import Dumper, Loader
+    from .abc import DumperKey  # noqa: F401
     from .adapt import AdaptersMap
     from .pq.abc import PGresult
-    from .connection import BaseConnection
+    from ._connection_base import BaseConnection
 
-DumperCache: TypeAlias = Dict[DumperKey, "Dumper"]
-OidDumperCache: TypeAlias = Dict[int, "Dumper"]
-LoaderCache: TypeAlias = Dict[int, "Loader"]
+DumperCache: TypeAlias = "dict[DumperKey, abc.Dumper]"
+OidDumperCache: TypeAlias = "dict[int, abc.Dumper]"
+LoaderCache: TypeAlias = "dict[int, abc.Loader]"
 
 TEXT = pq.Format.TEXT
 PY_TEXT = PyFormat.TEXT
@@ -50,14 +56,14 @@ class Transformer(AdaptContext):
         _oid_dumpers _oid_types _row_dumpers _row_loaders
         """.split()
 
-    types: Optional[Tuple[int, ...]]
-    formats: Optional[List[pq.Format]]
+    types: tuple[int, ...] | None
+    formats: list[pq.Format] | None
 
-    _adapters: "AdaptersMap"
-    _pgresult: Optional["PGresult"]
+    _adapters: AdaptersMap
+    _pgresult: PGresult | None
     _none_oid: int
 
-    def __init__(self, context: Optional[AdaptContext] = None):
+    def __init__(self, context: AdaptContext | None = None):
         self._pgresult = self.types = self.formats = None
 
         # WARNING: don't store context, or you'll create a loop with the Cursor
@@ -65,6 +71,8 @@ class Transformer(AdaptContext):
             self._adapters = context.adapters
             self._conn = context.connection
         else:
+            from . import postgres
+
             self._adapters = postgres.adapters
             self._conn = None
 
@@ -74,25 +82,25 @@ class Transformer(AdaptContext):
 
         # mapping fmt, oid -> Dumper instance
         # Not often used, so create it only if needed.
-        self._oid_dumpers: Optional[Tuple[OidDumperCache, OidDumperCache]]
+        self._oid_dumpers: tuple[OidDumperCache, OidDumperCache] | None
         self._oid_dumpers = None
 
         # mapping fmt, oid -> Loader instance
-        self._loaders: Tuple[LoaderCache, LoaderCache] = ({}, {})
+        self._loaders: tuple[LoaderCache, LoaderCache] = ({}, {})
 
-        self._row_dumpers: Optional[List["Dumper"]] = None
+        self._row_dumpers: list[abc.Dumper] | None = None
 
         # sequence of load functions from value to python
         # the length of the result columns
-        self._row_loaders: List[LoadFunc] = []
+        self._row_loaders: list[LoadFunc] = []
 
         # mapping oid -> type sql representation
-        self._oid_types: Dict[int, bytes] = {}
+        self._oid_types: dict[int, bytes] = {}
 
         self._encoding = ""
 
     @classmethod
-    def from_context(cls, context: Optional[AdaptContext]) -> "Transformer":
+    def from_context(cls, context: AdaptContext | None) -> Transformer:
         """
         Return a Transformer from an AdaptContext.
 
@@ -104,30 +112,29 @@ class Transformer(AdaptContext):
             return cls(context)
 
     @property
-    def connection(self) -> Optional["BaseConnection[Any]"]:
+    def connection(self) -> BaseConnection[Any] | None:
         return self._conn
 
     @property
     def encoding(self) -> str:
         if not self._encoding:
-            conn = self.connection
-            self._encoding = pgconn_encoding(conn.pgconn) if conn else "utf-8"
+            self._encoding = conn_encoding(self.connection)
         return self._encoding
 
     @property
-    def adapters(self) -> "AdaptersMap":
+    def adapters(self) -> AdaptersMap:
         return self._adapters
 
     @property
-    def pgresult(self) -> Optional["PGresult"]:
+    def pgresult(self) -> PGresult | None:
         return self._pgresult
 
     def set_pgresult(
         self,
-        result: Optional["PGresult"],
+        result: PGresult | None,
         *,
         set_loaders: bool = True,
-        format: Optional[pq.Format] = None,
+        format: pq.Format | None = None,
     ) -> None:
         self._pgresult = result
 
@@ -163,9 +170,9 @@ class Transformer(AdaptContext):
 
     def dump_sequence(
         self, params: Sequence[Any], formats: Sequence[PyFormat]
-    ) -> Sequence[Optional[Buffer]]:
+    ) -> Sequence[Buffer | None]:
         nparams = len(params)
-        out: List[Optional[Buffer]] = [None] * nparams
+        out: list[Buffer | None] = [None] * nparams
 
         # If we have dumpers, it means set_dumper_types had been called, in
         # which case self.types and self.formats are set to sequences of the
@@ -225,7 +232,7 @@ class Transformer(AdaptContext):
             rv = bytes(rv)
         return rv
 
-    def get_dumper(self, obj: Any, format: PyFormat) -> "Dumper":
+    def get_dumper(self, obj: Any, format: PyFormat) -> abc.Dumper:
         """
         Return a Dumper instance to dump `!obj`.
         """
@@ -271,7 +278,7 @@ class Transformer(AdaptContext):
 
         return rv
 
-    def get_dumper_by_oid(self, oid: int, format: pq.Format) -> "Dumper":
+    def get_dumper_by_oid(self, oid: int, format: pq.Format) -> abc.Dumper:
         """
         Return a Dumper to dump an object to the type with given oid.
         """
@@ -290,7 +297,7 @@ class Transformer(AdaptContext):
 
         return dumper
 
-    def load_rows(self, row0: int, row1: int, make_row: RowMaker[Row]) -> List[Row]:
+    def load_rows(self, row0: int, row1: int, make_row: RowMaker[Row]) -> list[Row]:
         res = self._pgresult
         if not res:
             raise e.InterfaceError("result not set")
@@ -302,7 +309,7 @@ class Transformer(AdaptContext):
 
         records = []
         for row in range(row0, row1):
-            record: List[Any] = [None] * self._nfields
+            record: list[Any] = [None] * self._nfields
             for col in range(self._nfields):
                 val = res.get_value(row, col)
                 if val is not None:
@@ -311,7 +318,7 @@ class Transformer(AdaptContext):
 
         return records
 
-    def load_row(self, row: int, make_row: RowMaker[Row]) -> Optional[Row]:
+    def load_row(self, row: int, make_row: RowMaker[Row]) -> Row | None:
         res = self._pgresult
         if not res:
             return None
@@ -319,7 +326,7 @@ class Transformer(AdaptContext):
         if not 0 <= row < self._ntuples:
             return None
 
-        record: List[Any] = [None] * self._nfields
+        record: list[Any] = [None] * self._nfields
         for col in range(self._nfields):
             val = res.get_value(row, col)
             if val is not None:
@@ -327,7 +334,7 @@ class Transformer(AdaptContext):
 
         return make_row(record)
 
-    def load_sequence(self, record: Sequence[Optional[Buffer]]) -> Tuple[Any, ...]:
+    def load_sequence(self, record: Sequence[Buffer | None]) -> tuple[Any, ...]:
         if len(self._row_loaders) != len(record):
             raise e.ProgrammingError(
                 f"cannot load sequence of {len(record)} items:"
@@ -339,7 +346,7 @@ class Transformer(AdaptContext):
             for i, val in enumerate(record)
         )
 
-    def get_loader(self, oid: int, format: pq.Format) -> "Loader":
+    def get_loader(self, oid: int, format: pq.Format) -> abc.Loader:
         try:
             return self._loaders[format][oid]
         except KeyError:

@@ -106,6 +106,34 @@ def test_single_row_mode(pgconn):
     assert res.ntuples == 0
 
 
+@pytest.mark.libpq(">= 17")
+def test_chunked_rows_mode(pgconn):
+    pgconn.send_query(b"select generate_series(1,7)")
+    pgconn.set_chunked_rows_mode(3)
+
+    results = execute_wait(pgconn)
+    assert len(results) == 4
+
+    res = results[0]
+    assert res.status == pq.ExecStatus.TUPLES_CHUNK
+    assert res.ntuples == 3
+    assert [res.get_value(i, 0) for i in range(3)] == [b"1", b"2", b"3"]
+
+    res = results[1]
+    assert res.status == pq.ExecStatus.TUPLES_CHUNK
+    assert res.ntuples == 3
+    assert [res.get_value(i, 0) for i in range(3)] == [b"4", b"5", b"6"]
+
+    res = results[2]
+    assert res.status == pq.ExecStatus.TUPLES_CHUNK
+    assert res.ntuples == 1
+    assert res.get_value(0, 0) == b"7"
+
+    res = results[3]
+    assert res.status == pq.ExecStatus.TUPLES_OK
+    assert res.ntuples == 0
+
+
 def test_send_query_params(pgconn):
     pgconn.send_query_params(b"select $1::int + $2", [b"5", b"3"])
     (res,) = execute_wait(pgconn)
@@ -189,6 +217,28 @@ def test_send_describe_prepared(pgconn):
         pgconn.send_describe_prepared(b"prep")
 
 
+@pytest.mark.libpq(">= 17")
+def test_send_close_prepared(pgconn):
+    pgconn.send_prepare(b"prep", b"select $1::int8 + $2::int8 as fld")
+    (res,) = execute_wait(pgconn)
+    assert res.status == pq.ExecStatus.COMMAND_OK, res.error_message
+
+    pgconn.send_close_prepared(b"prep")
+    (res,) = execute_wait(pgconn)
+    assert res.status == pq.ExecStatus.COMMAND_OK, res.error_message
+
+    # Because we closed it, describing should not work
+    pgconn.send_describe_prepared(b"prep")
+    (res,) = execute_wait(pgconn)
+    assert res.status == pq.ExecStatus.FATAL_ERROR
+
+
+@pytest.mark.libpq("< 17")
+def test_send_close_prepared_no_close(pgconn):
+    with pytest.raises(psycopg.NotSupportedError):
+        pgconn.send_close_prepared(b"prep")
+
+
 @pytest.mark.crdb_skip("server-side cursor")
 def test_send_describe_portal(pgconn):
     res = pgconn.exec_(
@@ -208,3 +258,30 @@ def test_send_describe_portal(pgconn):
     pgconn.finish()
     with pytest.raises(psycopg.OperationalError):
         pgconn.send_describe_portal(b"cur")
+
+
+@pytest.mark.libpq(">= 17")
+@pytest.mark.crdb_skip("close portal")
+def test_send_close_portal(pgconn):
+    res = pgconn.exec_(
+        b"""
+        begin;
+        declare cur cursor for select * from generate_series(1,10) foo;
+        """
+    )
+    assert res.status == pq.ExecStatus.COMMAND_OK, res.error_message
+
+    pgconn.send_close_portal(b"cur")
+    (res,) = execute_wait(pgconn)
+    assert res.status == pq.ExecStatus.COMMAND_OK, res.error_message
+
+    # Because we closed it, describing should not work
+    pgconn.send_describe_portal(b"cur")
+    (res,) = execute_wait(pgconn)
+    assert res.status == pq.ExecStatus.FATAL_ERROR
+
+
+@pytest.mark.libpq("< 17")
+def test_send_close_portal_no_close(pgconn):
+    with pytest.raises(psycopg.NotSupportedError):
+        pgconn.send_close_portal(b"cur")

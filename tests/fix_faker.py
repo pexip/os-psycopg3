@@ -1,12 +1,14 @@
+from __future__ import annotations
+
 import datetime as dt
 import importlib
 import ipaddress
 from math import isnan
 from uuid import UUID
 from random import choice, random, randrange
-from typing import Any, List, Set, Tuple, Union
+from typing import Any
 from decimal import Decimal
-from contextlib import contextmanager, asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 
 import pytest
 
@@ -14,8 +16,8 @@ import psycopg
 from psycopg import sql
 from psycopg.adapt import PyFormat
 from psycopg._compat import Deque
-from psycopg.types.range import Range
 from psycopg.types.json import Json, Jsonb
+from psycopg.types.range import Range
 from psycopg.types.numeric import Int4, Int8
 from psycopg.types.multirange import Multirange
 
@@ -42,7 +44,7 @@ class Faker:
         self.records = []
 
         self._schema = None
-        self._types = None
+        self._types: list[type] | None = None
         self._types_names = None
         self._makers = {}
         self.table_name = sql.Identifier("fake_table")
@@ -63,14 +65,19 @@ class Faker:
         return [sql.Identifier(f"fld_{i}") for i in range(len(self.schema))]
 
     @property
-    def types(self):
+    def types(self) -> list[type]:
         if not self._types:
 
             def key(cls: type) -> str:
-                return cls.__name__
+                return f"{cls.__module__}.{cls.__qualname__}"
 
             self._types = sorted(self.get_supported_types(), key=key)
+
         return self._types
+
+    @types.setter
+    def types(self, types: list[type]) -> None:
+        self._types = types
 
     @property
     def types_names_sql(self):
@@ -141,7 +148,7 @@ class Faker:
             with conn.transaction():
                 yield
         except psycopg.DatabaseError:
-            cur = conn.cursor()
+            cur = psycopg.Cursor(conn)
             # Repeat insert one field at time, until finding the wrong one
             cur.execute(self.drop_stmt)
             cur.execute(self.create_stmt)
@@ -166,7 +173,7 @@ class Faker:
             async with aconn.transaction():
                 yield
         except psycopg.DatabaseError:
-            acur = aconn.cursor()
+            acur = psycopg.AsyncCursor(aconn)
             # Repeat insert one field at time, until finding the wrong one
             await acur.execute(self.drop_stmt)
             await acur.execute(self.create_stmt)
@@ -192,7 +199,7 @@ class Faker:
         )
 
     def choose_schema(self, ncols=20):
-        schema: List[Union[Tuple[type, ...], type]] = []
+        schema: list[tuple[type, ...] | type] = []
         while len(schema) < ncols:
             s = self.make_schema(choice(self.types))
             if s is not None:
@@ -218,12 +225,19 @@ class Faker:
             m = self.get_matcher(spec)
             m(spec, g, w)
 
-    def get_supported_types(self) -> Set[type]:
+    def get_supported_types(self) -> set[type]:
         dumpers = self.conn.adapters._dumpers[self.format]
         rv = set()
         for cls in dumpers.keys():
             if isinstance(cls, str):
-                cls = deep_import(cls)
+                if cls == "numpy.bool":
+                    # An alias of numpy.bool_ for numpy > 2.
+                    # Raises a warning in numpy > 1.20.
+                    continue
+                try:
+                    cls = deep_import(cls)
+                except ImportError:
+                    continue
             if issubclass(cls, Multirange) and self.conn.info.server_version < 140000:
                 continue
 
@@ -235,7 +249,7 @@ class Faker:
 
         return rv
 
-    def make_schema(self, cls: type) -> Union[Tuple[type, ...], type, None]:
+    def make_schema(self, cls: type) -> tuple[type, ...] | type | None:
         """Create a schema spec from a Python type.
 
         A schema specifies what Postgres type to generate when a Python type
@@ -277,7 +291,7 @@ class Faker:
             name = f"{cls.__module__}.{name}"
 
         parts = name.split(".")
-        for i in range(len(parts)):
+        for i in range(len(parts) - 1, -1, -1):
             mname = f"{prefix}_{'_'.join(parts[-(i + 1) :])}"
             meth = getattr(self, mname, None)
             if meth:
@@ -310,7 +324,7 @@ class Faker:
         return want.obj == got
 
     def make_bool(self, spec):
-        return choice((True, False))
+        return spec(choice((True, False)))
 
     def make_bytearray(self, spec):
         return self.make_bytes(spec)
@@ -388,22 +402,28 @@ class Faker:
     def make_Enum(self, spec):
         return None
 
-    def make_float(self, spec, double=True):
+    def make_float(self, spec, size=64):
         if random() <= 0.99:
-            # These exponents should generate no inf
-            return float(
-                f"{choice('-+')}0.{randrange(1 << 53)}e{randrange(-310,309)}"
-                if double
-                else f"{choice('-+')}0.{randrange(1 << 22)}e{randrange(-37,38)}"
-            )
+            # These exponents should generate no inf/overflow
+            if size == 64:
+                s = f"{choice('-+')}0.{randrange(1 << 53)}e{randrange(-310,309)}"
+            elif size == 32:
+                s = f"{choice('-+')}0.{randrange(1 << 22)}e{randrange(-37,38)}"
+            elif size == 16:
+                s = f"{choice('-+')}0.{randrange(1 << 10)}e{randrange(-3,4)}"
+            else:
+                assert False, size
+            return spec(s)
         else:
-            return choice((0.0, -0.0, float("-inf"), float("inf"), float("nan")))
+            return choice(
+                (spec(0.0), spec(-0.0), spec("-inf"), spec("inf"), spec("nan"))
+            )
 
-    def match_float(self, spec, got, want, approx=False, rel=None):
+    def match_float(self, spec, got, want, rel=None):
         if got is not None and isnan(got):
             assert isnan(want)
         else:
-            if approx or self._server_rounds():
+            if rel or self._server_rounds():
                 assert got == pytest.approx(want, rel=rel)
             else:
                 assert got == want
@@ -419,13 +439,13 @@ class Faker:
             return self.conn.info.server_version < 120000
 
     def make_Float4(self, spec):
-        return spec(self.make_float(spec, double=False))
+        return self.make_float(spec, size=32)
 
     def match_Float4(self, spec, got, want):
-        self.match_float(spec, got, want, approx=True, rel=1e-5)
+        self.match_float(spec, got, want, rel=1e-5)
 
     def make_Float8(self, spec):
-        return spec(self.make_float(spec))
+        return self.make_float(spec)
 
     match_Float8 = match_float
 
@@ -561,7 +581,7 @@ class Faker:
 
             return l1 <= u2 and l2 <= u1
 
-        out: List[Range[Any]] = []
+        out: list[Range[Any]] = []
         for i in range(length):
             r = self.make_Range((Range, spec[1]), **kwargs)
             if r.isempty:
@@ -653,7 +673,7 @@ class Faker:
             return spec[0](empty=True)
 
         while True:
-            bounds: List[Union[Any, None]] = []
+            bounds: list[Any] = []
             while len(bounds) < 2:
                 if random() < no_bound_chance:
                     bounds.append(None)
@@ -714,7 +734,7 @@ class Faker:
             want = type(want)(want.lower, want.upper, want.bounds[0] + ")")
 
         # Normalise discrete ranges
-        unit: Union[dt.timedelta, int, None]
+        unit: dt.timedelta | int | None
         if spec[1] is dt.date:
             unit = dt.timedelta(days=1)
         elif type(spec[1]) is type and issubclass(spec[1], int):
@@ -763,7 +783,7 @@ class Faker:
         if not length:
             length = randrange(self.str_max_length)
 
-        rv: List[int] = []
+        rv: list[int] = []
         while len(rv) < length:
             c = randrange(1, 128) if random() < 0.5 else randrange(1, 0x110000)
             if not (0xD800 <= c <= 0xDBFF or 0xDC00 <= c <= 0xDFFF):
@@ -842,6 +862,69 @@ class Faker:
     def _make_tz(self, spec):
         minutes = randrange(-12 * 60, 12 * 60 + 1)
         return dt.timezone(dt.timedelta(minutes=minutes))
+
+    # numpy types support
+
+    def make_numpy_bool_(self, spec):
+        return self.make_bool(spec)
+
+    def make_numpy_int8(self, spec):
+        return spec(randrange(-(1 << 7), 1 << 7))
+
+    def make_numpy_int16(self, spec):
+        return self.make_Int2(spec)
+
+    def make_numpy_int32(self, spec):
+        return self.make_Int4(spec)
+
+    def make_numpy_int64(self, spec):
+        return self.make_Int8(spec)
+
+    def make_numpy_longlong(self, spec):
+        return self.make_numpy_int64(spec)
+
+    def make_numpy_uint8(self, spec):
+        return spec(randrange(0, 1 << 8))
+
+    def make_numpy_uint16(self, spec):
+        return spec(randrange(0, 1 << 16))
+
+    def make_numpy_uint32(self, spec):
+        return spec(randrange(0, 1 << 32))
+
+    def make_numpy_uint64(self, spec):
+        return spec(randrange(0, 1 << 64))
+
+    def make_numpy_ulonglong(self, spec):
+        return self.make_numpy_uint64(spec)
+
+    def make_numpy_float16(self, spec):
+        return self.make_float(spec, size=16)
+
+    def make_numpy_float32(self, spec):
+        return self.make_Float4(spec)
+
+    def make_numpy_float64(self, spec):
+        return self.make_Float8(spec)
+
+    def match_numpy_ulonglong(self, spec, got, want):
+        return self._match_numpy_with_decimal(spec, got, want)
+
+    def match_numpy_uint64(self, spec, got, want):
+        return self._match_numpy_with_decimal(spec, got, want)
+
+    def _match_numpy_with_decimal(self, spec, got, want):
+        assert isinstance(got, Decimal)
+        return self.match_any(spec, int(got), want)
+
+    def match_numpy_float16(self, spec, got, want):
+        return self.match_float(spec, got, want, rel=1e-3)
+
+    def match_numpy_float32(self, spec, got, want):
+        return self.match_Float4(spec, got, want)
+
+    def match_numpy_float64(self, spec, got, want):
+        return self.match_Float8(spec, got, want)
 
 
 class JsonFloat:

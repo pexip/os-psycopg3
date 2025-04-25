@@ -6,26 +6,18 @@ PostgreSQL database adapter for Python - optimisation package
 # Copyright (C) 2020 The Psycopg Team
 
 import os
-import re
 import sys
 import subprocess as sp
-
-from setuptools import setup, Extension
-from distutils.command.build_ext import build_ext
 from distutils import log
+from distutils.command.build_ext import build_ext
+
+from setuptools import Extension, setup
 
 # Move to the directory of setup.py: executing this file from another location
 # (e.g. from the project root) will fail
 here = os.path.abspath(os.path.dirname(__file__))
 if os.path.abspath(os.getcwd()) != here:
     os.chdir(here)
-
-with open("psycopg_c/version.py") as f:
-    data = f.read()
-    m = re.search(r"""(?m)^__version__\s*=\s*['"]([^'"]+)['"]""", data)
-    if m is None:
-        raise Exception(f"cannot find version in {f.name}")
-    version = m.group(1)
 
 
 def get_config(what: str) -> str:
@@ -50,7 +42,7 @@ class psycopg_build_ext(build_ext):
         # In the sdist there are not .pyx, only c, so we don't need Cython.
         # Otherwise Cython is a requirement and it is used to compile pyx to c.
         if os.path.exists("psycopg_c/_psycopg.pyx"):
-            from Cython.Build import cythonize
+            from Cython.Build import cythonize  # type: ignore
 
         # Add include and lib dir for the libpq.
         includedir = get_config("includedir")
@@ -104,7 +96,6 @@ pqext = Extension(
 )
 
 setup(
-    version=version,
     ext_modules=[pgext, pqext],
-    cmdclass={"build_ext": psycopg_build_ext},
+    cmdclass={"build_ext": psycopg_build_ext},  # type: ignore
 )

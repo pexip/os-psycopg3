@@ -1,28 +1,35 @@
-import pytest
 import string
-from random import randrange, choice
+from random import choice, randrange
+from typing import Any  # noqa: ignore
 
-from psycopg.pq import Format
-from psycopg import sql, errors as e
+import pytest
+
+from psycopg import errors as e
+from psycopg import pq, sql
 from psycopg.adapt import PyFormat
 from psycopg.types.numeric import Int4
 
-from ..utils import eur, gc_collect, gc_count
-from ..test_copy import sample_text, sample_binary  # noqa
-from ..test_copy import sample_records
-from ..test_copy_async import ensure_table
-from .test_copy import sample_tabledef, copyopt
+from ..utils import eur
+from .._test_copy import sample_binary  # noqa
+from .._test_copy import ensure_table_async, sample_records
+from .._test_copy import sample_tabledef as sample_tabledef_pg
+from .._test_copy import sample_text
 
-pytestmark = [pytest.mark.crdb, pytest.mark.anyio]
+# CRDB int/serial are int8
+sample_tabledef = sample_tabledef_pg.replace("int", "int4").replace("serial", "int4")
+
+pytestmark = [pytest.mark.crdb]
+if True:  # ASYNC
+    pytestmark.append(pytest.mark.anyio)
 
 
 @pytest.mark.parametrize(
     "format, buffer",
-    [(Format.TEXT, "sample_text"), (Format.BINARY, "sample_binary")],
+    [(pq.Format.TEXT, "sample_text"), (pq.Format.BINARY, "sample_binary")],
 )
 async def test_copy_in_buffers(aconn, format, buffer):
     cur = aconn.cursor()
-    await ensure_table(cur, sample_tabledef)
+    await ensure_table_async(cur, sample_tabledef)
     async with cur.copy(f"copy copy_in from stdin {copyopt(format)}") as copy:
         await copy.write(globals()[buffer])
 
@@ -33,17 +40,17 @@ async def test_copy_in_buffers(aconn, format, buffer):
 
 async def test_copy_in_buffers_pg_error(aconn):
     cur = aconn.cursor()
-    await ensure_table(cur, sample_tabledef)
+    await ensure_table_async(cur, sample_tabledef)
     with pytest.raises(e.UniqueViolation):
         async with cur.copy("copy copy_in from stdin") as copy:
             await copy.write(sample_text)
             await copy.write(sample_text)
-    assert aconn.info.transaction_status == aconn.TransactionStatus.INERROR
+    assert aconn.info.transaction_status == pq.TransactionStatus.INERROR
 
 
 async def test_copy_in_str(aconn):
     cur = aconn.cursor()
-    await ensure_table(cur, sample_tabledef)
+    await ensure_table_async(cur, sample_tabledef)
     async with cur.copy("copy copy_in from stdin") as copy:
         await copy.write(sample_text.decode())
 
@@ -55,29 +62,29 @@ async def test_copy_in_str(aconn):
 @pytest.mark.xfail(reason="bad sqlstate - CRDB #81559")
 async def test_copy_in_error(aconn):
     cur = aconn.cursor()
-    await ensure_table(cur, sample_tabledef)
+    await ensure_table_async(cur, sample_tabledef)
     with pytest.raises(e.QueryCanceled):
         async with cur.copy("copy copy_in from stdin with binary") as copy:
             await copy.write(sample_text.decode())
 
-    assert aconn.info.transaction_status == aconn.TransactionStatus.INERROR
+    assert aconn.info.transaction_status == pq.TransactionStatus.INERROR
 
 
-@pytest.mark.parametrize("format", Format)
+@pytest.mark.parametrize("format", pq.Format)
 async def test_copy_in_empty(aconn, format):
     cur = aconn.cursor()
-    await ensure_table(cur, sample_tabledef)
+    await ensure_table_async(cur, sample_tabledef)
     async with cur.copy(f"copy copy_in from stdin {copyopt(format)}"):
         pass
 
-    assert aconn.info.transaction_status == aconn.TransactionStatus.INTRANS
+    assert aconn.info.transaction_status == pq.TransactionStatus.INTRANS
     assert cur.rowcount == 0
 
 
 @pytest.mark.slow
 async def test_copy_big_size_record(aconn):
     cur = aconn.cursor()
-    await ensure_table(cur, "id serial primary key, data text")
+    await ensure_table_async(cur, "id serial primary key, data text")
     data = "".join(chr(randrange(1, 256)) for i in range(10 * 1024 * 1024))
     async with cur.copy("copy copy_in (data) from stdin") as copy:
         await copy.write_row([data])
@@ -89,7 +96,7 @@ async def test_copy_big_size_record(aconn):
 @pytest.mark.slow
 async def test_copy_big_size_block(aconn):
     cur = aconn.cursor()
-    await ensure_table(cur, "id serial primary key, data text")
+    await ensure_table_async(cur, "id serial primary key, data text")
     data = "".join(choice(string.ascii_letters) for i in range(10 * 1024 * 1024))
     copy_data = data + "\n"
     async with cur.copy("copy copy_in (data) from stdin") as copy:
@@ -101,26 +108,25 @@ async def test_copy_big_size_block(aconn):
 
 async def test_copy_in_buffers_with_pg_error(aconn):
     cur = aconn.cursor()
-    await ensure_table(cur, sample_tabledef)
+    await ensure_table_async(cur, sample_tabledef)
     with pytest.raises(e.UniqueViolation):
         async with cur.copy("copy copy_in from stdin") as copy:
             await copy.write(sample_text)
             await copy.write(sample_text)
 
-    assert aconn.info.transaction_status == aconn.TransactionStatus.INERROR
+    assert aconn.info.transaction_status == pq.TransactionStatus.INERROR
 
 
-@pytest.mark.parametrize("format", Format)
+@pytest.mark.parametrize("format", pq.Format)
 async def test_copy_in_records(aconn, format):
     cur = aconn.cursor()
-    await ensure_table(cur, sample_tabledef)
+    await ensure_table_async(cur, sample_tabledef)
 
     async with cur.copy(f"copy copy_in from stdin {copyopt(format)}") as copy:
+        row: "tuple[Any, ...]"
         for row in sample_records:
-            if format == Format.BINARY:
-                row = tuple(
-                    Int4(i) if isinstance(i, int) else i for i in row
-                )  # type: ignore[assignment]
+            if format == pq.Format.BINARY:
+                row = tuple(Int4(i) if isinstance(i, int) else i for i in row)
             await copy.write_row(row)
 
     await cur.execute("select * from copy_in order by 1")
@@ -128,10 +134,10 @@ async def test_copy_in_records(aconn, format):
     assert data == sample_records
 
 
-@pytest.mark.parametrize("format", Format)
+@pytest.mark.parametrize("format", pq.Format)
 async def test_copy_in_records_set_types(aconn, format):
     cur = aconn.cursor()
-    await ensure_table(cur, sample_tabledef)
+    await ensure_table_async(cur, sample_tabledef)
 
     async with cur.copy(f"copy copy_in from stdin {copyopt(format)}") as copy:
         copy.set_types(["int4", "int4", "text"])
@@ -143,10 +149,10 @@ async def test_copy_in_records_set_types(aconn, format):
     assert data == sample_records
 
 
-@pytest.mark.parametrize("format", Format)
+@pytest.mark.parametrize("format", pq.Format)
 async def test_copy_in_records_binary(aconn, format):
     cur = aconn.cursor()
-    await ensure_table(cur, "col1 serial primary key, col2 int4, data text")
+    await ensure_table_async(cur, "col1 serial primary key, col2 int4, data text")
 
     async with cur.copy(
         f"copy copy_in (col2, data) from stdin {copyopt(format)}"
@@ -162,19 +168,19 @@ async def test_copy_in_records_binary(aconn, format):
 @pytest.mark.crdb_skip("copy canceled")
 async def test_copy_in_buffers_with_py_error(aconn):
     cur = aconn.cursor()
-    await ensure_table(cur, sample_tabledef)
+    await ensure_table_async(cur, sample_tabledef)
     with pytest.raises(e.QueryCanceled) as exc:
         async with cur.copy("copy copy_in from stdin") as copy:
             await copy.write(sample_text)
             raise Exception("nuttengoggenio")
 
     assert "nuttengoggenio" in str(exc.value)
-    assert aconn.info.transaction_status == aconn.TransactionStatus.INERROR
+    assert aconn.info.transaction_status == pq.TransactionStatus.INERROR
 
 
 async def test_copy_in_allchars(aconn):
     cur = aconn.cursor()
-    await ensure_table(cur, "col1 int primary key, col2 int, data text")
+    await ensure_table_async(cur, "col1 int primary key, col2 int, data text")
 
     async with cur.copy("copy copy_in from stdin") as copy:
         for i in range(1, 256):
@@ -194,10 +200,10 @@ from copy_in group by 1, 2, 3
 @pytest.mark.slow
 @pytest.mark.parametrize(
     "fmt, set_types",
-    [(Format.TEXT, True), (Format.TEXT, False), (Format.BINARY, True)],
+    [(pq.Format.TEXT, True), (pq.Format.TEXT, False), (pq.Format.BINARY, True)],
 )
 @pytest.mark.crdb_skip("copy array")
-async def test_copy_from_leaks(aconn_cls, dsn, faker, fmt, set_types):
+async def test_copy_from_leaks(aconn_cls, dsn, faker, fmt, set_types, gc):
     faker.format = PyFormat.from_pq(fmt)
     faker.choose_schema(ncols=20)
     faker.make_records(20)
@@ -225,11 +231,15 @@ async def test_copy_from_leaks(aconn_cls, dsn, faker, fmt, set_types):
                 for got, want in zip(recs, faker.records):
                     faker.assert_record(got, want)
 
-    gc_collect()
+    gc.collect()
     n = []
     for i in range(3):
         await work()
-        gc_collect()
-        n.append(gc_count())
+        gc.collect()
+        n.append(gc.count())
 
     assert n[0] == n[1] == n[2], f"objects leaked: {n[1] - n[0]}, {n[2] - n[1]}"
+
+
+def copyopt(format):
+    return "with binary" if format == pq.Format.BINARY else ""

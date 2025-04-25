@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - "master"
+      - "maint-3.1"
+      - "maint-3.2"
       - "sqlalchemy_pipeline"
       - "django_pipeline"
     paths-ignore:
@@ -24,8 +26,8 @@ jobs:
       fail-fast: false
       matrix:
         python-version:
-          - "3.11"
-          - "3.7"
+          - "3.13"
+          - "3.9"
         sqlalchemy_label:
           # what version of sqlalchemy to download is defined in the "include" section below,
           # in the variable pip_sqlalchemy
@@ -36,14 +38,13 @@ jobs:
           - python
         include:
           - sqlalchemy_label: git_main
-            pip_sqlalchemy: git+https://github.com/sqlalchemy/sqlalchemy.git#egg=SQLAlchemy
+            pip_sqlalchemy: git+https://github.com/sqlalchemy/sqlalchemy.git#egg=sqlalchemy
           - sqlalchemy_label: release
-            # TODO: remove pre once v2 is stable
-            pip_sqlalchemy: --pre sqlalchemy>=2a
+            pip_sqlalchemy: sqlalchemy>=2
 
     env:
       PSYCOPG_IMPL: ${{ matrix.impl }}
-      DEPS: ./psycopg pytest pytest-xdist
+      DEPS: ./psycopg pytest pytest-xdist greenlet
 
     services:
       postgresql:
@@ -61,9 +62,9 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -90,15 +91,15 @@ jobs:
         run: |
           pip download --no-deps --no-binary :all: ${{ matrix.pip_sqlalchemy }}
           mkdir sa_home
-          case $(file --brief --mime-type SQLAlchemy*) in
+          case $(file --brief --mime-type sqlalchemy*) in
             application/gzip)
-              tar -C sa_home -xzf SQLAlchemy*
+              tar -C sa_home -xzf sqlalchemy*
               ;;
             application/zip)
-              unzip -d sa_home -q SQLAlchemy*
+              unzip -d sa_home -q sqlalchemy*
               ;;
             *)
-              echo "Unexpected format for $(file --mime-type SQLAlchemy*)" >&2
+              echo "Unexpected format for $(file --mime-type sqlalchemy*)" >&2
               exit 1
               ;;
           esac
@@ -110,7 +111,7 @@ jobs:
         env:
           URL: postgresql+psycopg://postgres:password@127.0.0.1/test
         working-directory: sa_home/sa
-        run: pytest -n 2 -q --dburi $URL --backend-only --dropfirst --color=yes
+        run: pytest -n 2 -q --dburi $URL --backend-only --dropfirst --color=yes --dbdriver psycopg_async
 
   django:
     # linux should be enough to test if everything works.
@@ -119,8 +120,8 @@ jobs:
       fail-fast: false
       matrix:
         django_label:
-          # what version of django to download is defined in the "include" section below,
-          # in the variable pip_django
+          # what version of django to download is defined in the "include"
+          # section below, in the variable pip_django
           - git_main
           - lts
         impl:
@@ -129,16 +130,26 @@ jobs:
         include:
           - django_label: git_main
             pip_django: git+https://github.com/django/django.git#egg=Django
-            python-version: "3.11"
           # TODO: Needs updating with new LTS releases, is this something we want?
-          #       Also needs consideration against which python we wanna test.
-          #       Current logic is test oldest in lts and newest in main
           - django_label: lts
             pip_django: "'Django>=4.2,<4.3'"
+
+          # Test with min and max Python supported versions
+          - django_label: lts
+            impl: c
             python-version: "3.8"
+          - django_label: lts
+            impl: python
+            python-version: "3.13"
+          - django_label: git_main
+            impl: c
+            python-version: "3.13"
+          - django_label: git_main
+            impl: python
+            python-version: "3.12"
 
     env:
-      DEPS: ./psycopg
+      DEPS: ./psycopg ./psycopg_pool
 
     services:
       postgresql:
@@ -156,9 +167,9 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -223,7 +234,7 @@ jobs:
           USE_TZ = False
           HERE
 
-      - uses: actions/cache@v3
+      - uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ matrix.python-version }}-pip-${{ hashFiles('django_home/django/tests/requirements/py3.txt', 'django_home/django/setup.cfg') }}
@@ -233,6 +244,12 @@ jobs:
       - name: Install Django and dependencies
         working-directory: django_home/django
         run: |
+          # pylibmc wheel package not available from Python 3.12.
+          # https://github.com/lericson/pylibmc/issues/288
+          # Dependency in:
+          # https://github.com/django/django/blob/main/tests/requirements/py3.txt#L12
+          # (You can check the above in case it gets dropped in the future).
+          sudo apt-get install -y libmemcached-dev
           pip install .
           pip install -r tests/requirements/py3.txt
 

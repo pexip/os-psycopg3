@@ -8,9 +8,46 @@
 Cursor types
 ============
 
-Psycopg can manage kinds of "cursors" which differ in where the state of a
-query being processed is stored: :ref:`client-side-cursors` and
-:ref:`server-side-cursors`.
+Cursors are objects used to send commands to a PostgreSQL connection and to
+manage the results returned by it. They are normally created by the
+connection's `~Connection.cursor()` method.
+
+Psycopg can manage different kinds of "cursors", the objects used to send
+queries and retrieve results from the server. They differ from each other in
+aspects such as:
+
+- Are the parameters bound on the client or on the server?
+  :ref:`server-side-binding` can offer better performance (for instance
+  allowing to use prepared statements) and reduced memory footprint, but may
+  require stricter query definition and certain queries that work in
+  `!psycopg2` might need to be adapted.
+
+- Is the query result stored on the client or on the server? Server-side
+  cursors allow partial retrieval of large datasets, but they might offer less
+  performance in everyday usage.
+
+- Are queries manipulated by Python (to handle placeholders in ``%s`` and
+  ``%(name)s`` Python-style) or sent as they are to the PostgreSQL server
+  (which only supports ``$1``, ``$2`` parameters)?
+
+Psycopg exposes the following classes to implement the different strategies.
+All the classes are exposed by the main `!psycopg` package. Every class has
+also an `!Async`\ -prefixed counterparts, designed to be used in conjunction
+with `AsyncConnection` in `asyncio` programs.
+
+================= =========== =========== ==================== ==================================
+Class             Binding     Storage     Placeholders         See also
+================= =========== =========== ==================== ==================================
+`Cursor`          server-side client-side ``%s``, ``%(name)s`` :ref:`client-side-cursors`
+`ClientCursor`    client-side client-side ``%s``, ``%(name)s`` :ref:`client-side-binding-cursors`
+`ServerCursor`    server-side server-side ``%s``, ``%(name)s`` :ref:`server-side-cursors`
+`RawCursor`       server-side client-side ``$1``               :ref:`raw-query-cursors`
+`RawServerCursor` server-side server-side ``$1``               :ref:`raw-query-cursors`
+================= =========== =========== ==================== ==================================
+
+If not specified by a `~Connection.cursor_factory`, `~Connection.cursor()`
+will usually produce `Cursor` objects.
+
 
 .. index::
     double: Cursor; Client-side
@@ -89,6 +126,7 @@ as argument.
     conn = psycopg.connect(DSN)
     cur = psycopg.ClientCursor(conn)
 
+
 .. warning::
 
     Client-side cursors don't support :ref:`binary parameters and return
@@ -105,6 +143,51 @@ as argument.
     composition, to mix client- and server-side parameters binding, and allows
     to parametrize tables and fields names too, or entirely generic SQL
     snippets.
+
+
+.. index::
+    single: PgBouncer
+    double: Query protocol; simple
+
+.. _simple-query-protocol:
+
+Simple query protocol
+^^^^^^^^^^^^^^^^^^^^^
+
+Using the `!ClientCursor` should ensure that psycopg will always use the
+`simple query protocol`__ for querying. In most cases, the choice of the
+fronted/backend protocol used is transparent on PostgreSQL. However, in some
+case using the simple query protocol is mandatory. This is the case querying
+the `PgBouncer admin console`__ for instance, which doesn't support the
+extended query protocol.
+
+.. __: https://www.postgresql.org/docs/current/protocol-flow.html#PROTOCOL-FLOW-SIMPLE-QUERY
+.. __: https://www.pgbouncer.org/usage.html#admin-console
+
+.. code:: python
+
+    from psycopg import connect, ClientCursor
+
+    conn = psycopg.connect(ADMIN_DSN, cursor_factory=ClientCursor)
+    cur = conn.cursor()
+    cur.execute("SHOW STATS")
+    cur.fetchall()
+
+.. versionchanged:: 3.1.20
+    While querying using the `!ClientCursor` works well with PgBouncer, the
+    connection's COMMIT and ROLLBACK commands are only ensured to be executed
+    using the simple query protocol starting from Psycopg 3.1.20.
+
+    In previous versions you should use an autocommit connection in order to
+    query the PgBouncer admin console:
+
+    .. code:: python
+
+        from psycopg import connect, ClientCursor
+
+        conn = psycopg.connect(ADMIN_DSN, cursor_factory=ClientCursor, autocommit=True)
+        ...
+
 
 .. index::
     double: Cursor; Server-side
@@ -190,3 +273,50 @@ directly call the fetch methods, skipping the `~ServerCursor.execute()` call:
     # no cur.execute()
     for record in cur:  # or cur.fetchone(), cur.fetchmany()...
         # do something with record
+
+
+.. _raw-query-cursors:
+
+Raw query cursors
+-----------------
+
+.. versionadded:: 3.2
+
+The `RawCursor` and `AsyncRawCursor` classes allow users to use PostgreSQL
+native placeholders (``$1``, ``$2``, etc.) in their queries instead of the
+standard ``%s`` placeholder. This can be useful when it's desirable to pass
+the query unmodified to PostgreSQL and rely on PostgreSQL's placeholder
+functionality, such as when dealing with a very complex query containing
+``%s`` inside strings, dollar-quoted strings or elsewhere.
+
+One important note is that raw query cursors only accept positional arguments
+in the form of a list or tuple. This means you cannot use named arguments
+(i.e., dictionaries).
+
+`!RawCursor` behaves like `Cursor`, in returning the complete result from the
+server to the client. The `RawServerCursor` and `AsyncRawServerCursor`
+implement :ref:`server-side-cursors` with raw PostgreSQL placeholders.
+
+There are two ways to use raw query cursors:
+
+1. Using the cursor factory:
+
+.. code:: python
+
+    from psycopg import connect, RawCursor
+
+    with connect(dsn, cursor_factory=RawCursor) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT $1, $2", [1, "Hello"])
+            assert cur.fetchone() == (1, "Hello")
+
+2. Instantiating a cursor:
+
+.. code:: python
+
+    from psycopg import connect, RawCursor
+
+    with connect(dsn) as conn:
+        with RawCursor(conn) as cur:
+            cur.execute("SELECT $1, $2", [1, "Hello"])
+            assert cur.fetchone() == (1, "Hello")

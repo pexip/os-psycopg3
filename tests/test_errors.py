@@ -1,15 +1,16 @@
+from __future__ import annotations
+
 import sys
 import pickle
-from typing import List
 from weakref import ref
 
 import pytest
 
 import psycopg
-from psycopg import pq
 from psycopg import errors as e
+from psycopg import pq
 
-from .utils import eur, gc_collect
+from .utils import eur
 from .fix_crdb import is_crdb
 
 
@@ -50,7 +51,7 @@ def test_diag_right_attr(pgconn, monkeypatch):
     diag = e.Diagnostic(res)
 
     to_check: pq.DiagnosticField
-    checked: List[pq.DiagnosticField] = []
+    checked: list[pq.DiagnosticField] = []
 
     def check_val(self, v):
         nonlocal to_check
@@ -187,7 +188,7 @@ def test_diag_pickle(conn):
     (pq.__impl__ in ("c", "binary") and sys.version_info[:2] == (3, 12)),
     reason="Something with Exceptions, C, Python 3.12",
 )
-def test_diag_survives_cursor(conn):
+def test_diag_survives_cursor(conn, gc_collect):
     cur = conn.cursor()
     with pytest.raises(e.Error) as exc:
         cur.execute("select * from nosuchtable")
@@ -323,3 +324,32 @@ def test_pgresult_pickle(conn):
 
 def test_blank_sqlstate(conn):
     assert e.get_base_exception("") is e.DatabaseError
+
+
+@pytest.mark.parametrize(
+    "msg",
+    [
+        'connection to server at "2001:1488:fffe:20::229", port 5432 failed',
+        "HORROR: foo\n",
+    ],
+)
+def test_strip_severity_unstripped(msg):
+    from psycopg.pq.misc import strip_severity
+
+    out = strip_severity(msg)
+    assert out == msg.strip()
+
+
+@pytest.mark.parametrize(
+    "msg",
+    [
+        "ERROR: foo\n",
+        "ERRORE: foo\nbar\n",
+        "오류: foo: bar",
+    ],
+)
+def test_strip_severity_l10n(msg):
+    from psycopg.pq.misc import strip_severity
+
+    out = strip_severity(msg)
+    assert out == msg.split(":", 1)[1].strip()

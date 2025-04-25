@@ -4,22 +4,25 @@ psycopg client-side binding cursors
 
 # Copyright (C) 2022 The Psycopg Team
 
-from typing import Optional, Tuple, TYPE_CHECKING
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 from functools import partial
 
-from ._queries import PostgresQuery, PostgresClientQuery
-
-from . import pq
 from . import adapt
 from . import errors as e
-from .abc import ConnectionType, Query, Params
+from . import pq
+from .abc import ConnectionType, Params, Query
 from .rows import Row
-from .cursor import BaseCursor, Cursor
+from .cursor import Cursor
+from ._queries import PostgresClientQuery, PostgresQuery
 from ._preparing import Prepare
+from ._cursor_base import BaseCursor
 from .cursor_async import AsyncCursor
 
 if TYPE_CHECKING:
     from typing import Any  # noqa: F401
+
     from .connection import Connection  # noqa: F401
     from .connection_async import AsyncConnection  # noqa: F401
 
@@ -28,7 +31,9 @@ BINARY = pq.Format.BINARY
 
 
 class ClientCursorMixin(BaseCursor[ConnectionType, Row]):
-    def mogrify(self, query: Query, params: Optional[Params] = None) -> str:
+    _query_cls = PostgresClientQuery
+
+    def mogrify(self, query: Query, params: Params | None = None) -> str:
         """
         Return the query and parameters merged.
 
@@ -45,7 +50,7 @@ class ClientCursorMixin(BaseCursor[ConnectionType, Row]):
         query: PostgresQuery,
         *,
         force_extended: bool = False,
-        binary: Optional[bool] = None,
+        binary: bool | None = None,
     ) -> None:
         if binary is None:
             fmt = self.format
@@ -72,16 +77,9 @@ class ClientCursorMixin(BaseCursor[ConnectionType, Row]):
             # as it can execute more than one statement in a single query.
             self._pgconn.send_query(query.query)
 
-    def _convert_query(
-        self, query: Query, params: Optional[Params] = None
-    ) -> PostgresQuery:
-        pgq = PostgresClientQuery(self._tx)
-        pgq.convert(query, params)
-        return pgq
-
     def _get_prepared(
-        self, pgq: PostgresQuery, prepare: Optional[bool] = None
-    ) -> Tuple[Prepare, bytes]:
+        self, pgq: PostgresQuery, prepare: bool | None = None
+    ) -> tuple[Prepare, bytes]:
         return (Prepare.NO, b"")
 
 

@@ -208,6 +208,10 @@ The `!Connection` class
         ones: you should call `!await` `~AsyncConnection.set_autocommit`
         :samp:`({value})` instead.
 
+    .. automethod:: set_autocommit
+
+        .. versionadded:: 3.2
+
     The following three properties control the characteristics of new
     transactions. See :ref:`transaction-characteristics` for details.
 
@@ -219,6 +223,10 @@ The `!Connection` class
         .. __: https://www.postgresql.org/docs/current/runtime-config-client.html
                #GUC-DEFAULT-TRANSACTION-ISOLATION
 
+    .. automethod:: set_isolation_level
+
+        .. versionadded:: 3.2
+
     .. autoattribute:: read_only
 
         `!None` means use the default set in the default_transaction_read_only__
@@ -227,6 +235,10 @@ The `!Connection` class
         .. __: https://www.postgresql.org/docs/current/runtime-config-client.html
                #GUC-DEFAULT-TRANSACTION-READ-ONLY
 
+    .. automethod:: set_read_only
+
+        .. versionadded:: 3.2
+
     .. autoattribute:: deferrable
 
         `!None` means use the default set in the default_transaction_deferrable__
@@ -234,6 +246,10 @@ The `!Connection` class
 
         .. __: https://www.postgresql.org/docs/current/runtime-config-client.html
                #GUC-DEFAULT-TRANSACTION-DEFERRABLE
+
+    .. automethod:: set_deferrable
+
+        .. versionadded:: 3.2
 
 
     .. rubric:: Checking and configuring the connection state
@@ -257,18 +273,71 @@ The `!Connection` class
 
         If more queries need to be prepared, old ones are deallocated__.
 
+        Specifying `!None` can be useful for middleware that don't support
+        deallocation; see :ref:`prepared statements notes <pgbouncer>`.
+
         .. __: https://www.postgresql.org/docs/current/sql-deallocate.html
+
+        .. versionchanged:: 3.2
+
+            Added support for the `!None` value.
 
 
     .. rubric:: Methods you can use to do something cool
 
+    .. automethod:: cancel_safe
+
+        .. note::
+
+            You can use the `~Capabilities.has_cancel_safe` capability to check
+            if `!cancel_safe()` will not fall back on the legacy libpq
+            functions.
+
+        .. warning::
+
+            The `timeout` parameter has no effect for libpq older than version
+            17.
+
+        .. warning::
+
+            This method shouldn't be used as a `~signal.signal` handler.
+            Please use `cancel()` instead.
+
+        .. versionadded:: 3.2
+
     .. automethod:: cancel
+
+        .. warning::
+
+            The `!cancel()` method is implemented using the :pq:`PQcancel`
+            function, which is deprecated since PostgreSQL 17, and has a few
+            shortcomings:
+
+            - it is blocking even on async connections,
+            - it `might use an insecure connection`__ even if the original
+              connection was secure.
+
+            Therefore you should use the `cancel_safe()` method whenever
+            possible.
+
+            .. __: https://www.postgresql.org/docs/devel/libpq-cancel.html
+                   #LIBPQ-CANCEL-DEPRECATED
+
+        .. note::
+
+            Unlike `cancel_safe()`, it is safe to call this method as a
+            `~signal.signal` handler. This is pretty much the only case in
+            which you might want to use this function.
 
     .. automethod:: notifies
 
         Notifies are received after using :sql:`LISTEN` in a connection, when
         any sessions in the database generates a :sql:`NOTIFY` on one of the
         listened channels.
+
+        .. versionchanged:: 3.2
+
+            Added `!timeout` and `!stop_after` parameters.
 
     .. automethod:: add_notify_handler
 
@@ -477,7 +546,16 @@ The `!AsyncConnection` class
                 async with conn.transaction() as tx:
                     ...
 
+    .. automethod:: cancel_safe
+
+        .. versionadded:: 3.2
+
     .. automethod:: notifies
+
+        .. versionchanged:: 3.2
+
+            Added `!timeout` and `!stop_after` parameters.
+
     .. automethod:: set_autocommit
     .. automethod:: set_isolation_level
     .. automethod:: set_read_only

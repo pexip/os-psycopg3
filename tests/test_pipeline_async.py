@@ -1,4 +1,5 @@
-import asyncio
+from __future__ import annotations
+
 import logging
 from typing import Any
 from operator import attrgetter
@@ -7,20 +8,22 @@ from itertools import groupby
 import pytest
 
 import psycopg
-from psycopg import pq
 from psycopg import errors as e
+from psycopg import pq
 
-from .test_pipeline import pipeline_aborted
+from .acompat import anext, is_async
 
 pytestmark = [
     pytest.mark.pipeline,
-    pytest.mark.skipif("not psycopg.AsyncPipeline.is_supported()"),
+    pytest.mark.skipif("not psycopg.Pipeline.is_supported()"),
 ]
+pipeline_aborted = pytest.mark.flakey("the server might get in pipeline aborted")
 
 
 async def test_repr(aconn):
     async with aconn.pipeline() as p:
-        assert "psycopg.AsyncPipeline" in repr(p)
+        name = "psycopg.AsyncPipeline" if is_async(aconn) else "psycopg.Pipeline"
+        assert name in repr(p)
         assert "[IDLE, pipeline=ON]" in repr(p)
 
     await aconn.close()
@@ -105,7 +108,7 @@ async def test_pipeline_nested_sync_trace(aconn, trace):
 async def test_cursor_stream(aconn):
     async with aconn.pipeline(), aconn.cursor() as cur:
         with pytest.raises(psycopg.ProgrammingError):
-            await cur.stream("select 1").__anext__()
+            await anext(cur.stream("select 1"))
 
 
 async def test_server_cursor(aconn):
@@ -318,8 +321,7 @@ async def test_executemany(aconn):
     await aconn.set_autocommit(True)
     await aconn.execute("drop table if exists execmanypipeline")
     await aconn.execute(
-        "create unlogged table execmanypipeline ("
-        " id serial primary key, num integer)"
+        "create unlogged table execmanypipeline (id serial primary key, num integer)"
     )
     async with aconn.pipeline(), aconn.cursor() as cur:
         await cur.executemany(
@@ -339,8 +341,8 @@ async def test_executemany_no_returning(aconn):
     await aconn.set_autocommit(True)
     await aconn.execute("drop table if exists execmanypipelinenoreturning")
     await aconn.execute(
-        "create unlogged table execmanypipelinenoreturning ("
-        " id serial primary key, num integer)"
+        """create unlogged table execmanypipelinenoreturning
+            (id serial primary key, num integer)"""
     )
     async with aconn.pipeline(), aconn.cursor() as cur:
         await cur.executemany(
@@ -567,10 +569,9 @@ async def test_concurrency(aconn):
         await aconn.execute("drop table if exists accessed")
     async with aconn.transaction():
         await aconn.execute(
-            "create unlogged table pipeline_concurrency ("
-            " id serial primary key,"
-            " value integer"
-            ")"
+            """create unlogged table pipeline_concurrency (
+                id serial primary key,
+                value integer)"""
         )
         await aconn.execute("create unlogged table accessed as (select now() as value)")
 
@@ -588,36 +589,34 @@ async def test_concurrency(aconn):
 
     values = range(1, 10)
     async with aconn.pipeline():
-        cursors = await asyncio.wait_for(
-            asyncio.gather(*[update(value) for value in values]),
-            timeout=len(values),
-        )
+        if is_async(aconn):
+            import asyncio
 
-    assert sum([(await cur.fetchone())[0] for cur in cursors]) == sum(values)
+            cursors = await asyncio.wait_for(
+                asyncio.gather(*[update(value) for value in values]),
+                timeout=len(values),
+            )
+        else:
+            from concurrent.futures import ThreadPoolExecutor
 
-    (s,) = await (
-        await aconn.execute("select sum(value) from pipeline_concurrency")
-    ).fetchone()
+            with ThreadPoolExecutor() as e:
+                cursors = list(e.map(update, values, timeout=len(values)))
+
+        assert sum([(await cur.fetchone())[0] for cur in cursors]) == sum(values)
+
+    cur = await aconn.execute("select sum(value) from pipeline_concurrency")
+    (s,) = await cur.fetchone()
     assert s == sum(values)
     (after,) = await (await aconn.execute("select value from accessed")).fetchone()
     assert after > before
 
 
-async def test_execute_nextset_warning(aconn):
+async def test_execute_nextset(aconn):
     cur = aconn.cursor()
-    await cur.execute("select 1")
-    await cur.execute("select 2")
-
-    assert (await cur.fetchall()) == [(2,)]
-    assert not cur.nextset()
-    assert (await cur.fetchall()) == []
-
     async with aconn.pipeline():
         await cur.execute("select 1")
         await cur.execute("select 2")
 
-        # WARNING: this behavior is unintentional and will be changed in 3.2
-        assert (await cur.fetchall()) == [(1,)]
-        with pytest.warns(DeprecationWarning, match="nextset"):
-            assert cur.nextset()
         assert (await cur.fetchall()) == [(2,)]
+        assert not cur.nextset()
+        assert (await cur.fetchall()) == []

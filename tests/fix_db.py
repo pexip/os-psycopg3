@@ -1,22 +1,24 @@
+from __future__ import annotations
+
 import io
 import os
 import sys
-import pytest
 import logging
 from contextlib import contextmanager
-from typing import Optional
+
+import pytest
 
 import psycopg
-from psycopg import pq
-from psycopg import sql
+from psycopg import pq, sql
 from psycopg._compat import cache
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.pq._debug import PGconnDebug
 
 from .utils import check_postgres_version
 
 # Set by warm_up_database() the first time the dsn fixture is used
 pg_version: int
-crdb_version: Optional[int]
+crdb_version: int | None
 
 
 def pytest_addoption(parser):
@@ -68,9 +70,11 @@ def pytest_collection_modifyitems(items):
 
 
 def pytest_runtest_setup(item):
-    for m in item.iter_markers(name="pipeline"):
-        if not psycopg.Pipeline.is_supported():
-            pytest.skip(psycopg.Pipeline._not_supported_reason())
+    # Note: not using Capabilities.has_pipeline() to allow running the tests
+    # with Psycopg 3.1.
+    if not psycopg.Pipeline.is_supported():
+        for m in item.iter_markers(name="pipeline"):
+            pytest.skip("pipeline mode not supported")
 
 
 def pytest_configure(config):
@@ -102,6 +106,23 @@ def dsn(session_dsn, request):
     """Return the dsn used to connect to the `--test-dsn` database."""
     check_connection_version(request.node)
     return session_dsn
+
+
+@pytest.fixture
+def dsn_env(dsn):
+    """Return a dsn including the connection parameters set in PG* env vars.
+
+    Provide a working conninfo even in tests that modify the env vars.
+    """
+    args = conninfo_to_dict(dsn)
+    for opt in pq.Conninfo.get_defaults():
+        if not (opt.envvar and opt.envvar.decode() in os.environ):
+            continue
+        if opt.keyword.decode() in args:
+            continue
+        args[opt.keyword.decode()] = os.environ[opt.envvar.decode()]
+
+    return make_conninfo("", **args)
 
 
 @pytest.fixture(scope="session")
@@ -173,7 +194,7 @@ def pgconn(dsn, request, tracefile):
 
     conn = pq.PGconn.connect(dsn.encode())
     if conn.status != pq.ConnStatus.OK:
-        pytest.fail(f"bad connection: {conn.error_message.decode('utf8', 'replace')}")
+        pytest.fail(f"bad connection: {conn.get_error_message()}")
 
     with maybe_trace(conn, tracefile, request.function):
         yield conn
@@ -196,7 +217,7 @@ def conn(conn_cls, dsn, request, tracefile):
 def pipeline(request, conn):
     if request.param:
         if not psycopg.Pipeline.is_supported():
-            pytest.skip(psycopg.Pipeline._not_supported_reason())
+            pytest.skip("pipeline mode not supported")
         with conn.pipeline() as p:
             yield p
         return
@@ -219,7 +240,7 @@ async def aconn(dsn, aconn_cls, request, tracefile):
 async def apipeline(request, aconn):
     if request.param:
         if not psycopg.Pipeline.is_supported():
-            pytest.skip(psycopg.Pipeline._not_supported_reason())
+            pytest.skip("pipeline mode not supported")
         async with aconn.pipeline() as p:
             yield p
         return

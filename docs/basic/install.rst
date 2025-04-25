@@ -6,10 +6,13 @@ Installation
 In short, if you use a :ref:`supported system<supported-systems>`::
 
     pip install --upgrade pip           # upgrade pip to at least 20.3
-    pip install "psycopg[binary]"
+    pip install "psycopg[binary]"       # remove [binary] for PyPy
 
 and you should be :ref:`ready to start <module-usage>`. Read further for
 alternative ways to install.
+
+.. note::
+   Fun fact: there is no ``psycopg3`` package, only ``psycopg``!
 
 
 .. _supported-systems:
@@ -19,12 +22,23 @@ Supported systems
 
 The Psycopg version documented here has *official and tested* support for:
 
-- Python: from version 3.7 to 3.11
+- Python: from version 3.8 to 3.13
 
   - Python 3.6 supported before Psycopg 3.1
+  - Python 3.7 supported before Psycopg 3.2
 
-- PostgreSQL: from version 10 to 15
+- PyPy: from version 3.9 to 3.10
+
+  - **Note:** Only the pure Python version is supported.
+
+- PostgreSQL: from version 10 to 17
+
+  - **Note:** PostgreSQL `currently supported release`__ are actively tested
+    in the CI. Out-of-support releases are supported on a best-effort basis.
+
 - OS: Linux, macOS, Windows
+
+.. __: https://www.postgresql.org/support/versioning/
 
 The tests to verify the supported systems run in `Github workflows`__:
 anything that is not tested there is not officially supported. This includes:
@@ -33,7 +47,7 @@ anything that is not tested there is not officially supported. This includes:
 
 - Unofficial Python distributions such as Conda;
 - Alternative PostgreSQL implementation;
-- macOS hardware and releases not available on Github workflows.
+- Other platforms such as BSD or Solaris.
 
 If you use an unsupported system, things might work (because, for instance, the
 database may use the same wire protocol as PostgreSQL) but we cannot guarantee
@@ -54,13 +68,6 @@ This will install a self-contained package with all the libraries needed.
 **You will need pip 20.3 at least**: please run ``pip install --upgrade pip``
 to update it beforehand.
 
-The above package should work in most situations. It **will not work** in
-some cases though.
-
-If your platform is not supported you should proceed to a :ref:`local
-installation <local-installation>` or a :ref:`pure Python installation
-<pure-python-installation>`.
-
 .. seealso::
 
     Did Psycopg 3 install ok? Great! You can now move on to the :ref:`basic
@@ -71,6 +78,40 @@ installation <local-installation>` or a :ref:`pure Python installation
 
     For further information about the differences between the packages see
     :ref:`pq-impl`.
+
+If your platform is not supported, or if the libpq packaged is not suitable,
+you should proceed to a :ref:`local installation <local-installation>` or a
+:ref:`pure Python installation <pure-python-installation>`.
+
+.. note::
+
+    Binary packages are produced on a best-effort basis; the supported
+    platforms depend on the CI runners available to build the
+    packages. This means that:
+
+    - binary packages for a new version of Python are made available once
+      the runners used for the build support it. You can check the
+      `psycopg-binary PyPI files`__ to verify whether your platform is
+      supported;
+
+    - the libpq version included in the binary packages depends on the version
+      available on the runners. You can use the `psycopg.pq.version()`
+      function and `~psycopg.pq.__build_version__` constant to infer the
+      features available.
+
+    .. __: https://pypi.org/project/psycopg-binary/#files
+
+
+.. warning::
+
+    - Starting from Psycopg 3.1.20, ARM64 macOS binary packages (i.e. for
+      Apple M1 machines) are no more available for macOS versions before 14.0.
+      Please upgrade your OS to at least 14.0 or use a :ref:`local
+      <local-installation>` or a :ref:`Python <pure-python-installation>`
+      installation.
+
+    - The binary installation is not supported by PyPy.
+
 
 
 .. _local-installation:
@@ -98,6 +139,10 @@ try this and follow the `binary installation`_ instead.
 If your build prerequisites are in place you can run::
 
     pip install "psycopg[c]"
+
+.. warning::
+
+   The local installation is not supported by PyPy.
 
 
 .. _pure-python-installation:
@@ -165,7 +210,7 @@ you should probably specify one of the following:
 In both cases you can specify which version of Psycopg to use using
 `requirement specifiers`__.
 
-.. __: https://pip.pypa.io/en/stable/cli/pip_install/#requirement-specifiers
+.. __: https://pip.pypa.io/en/stable/reference/requirement-specifiers/
 
 If you want to make sure that a specific implementation is used you can
 specify the :envvar:`PSYCOPG_IMPL` environment variable: importing the library

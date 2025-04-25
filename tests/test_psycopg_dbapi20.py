@@ -1,12 +1,14 @@
-import pytest
+from __future__ import annotations
+
 import datetime as dt
-from typing import Any, Dict
+from typing import Any
+
+import pytest
 
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
 
-from . import dbapi20
-from . import dbapi20_tpc
+from . import dbapi20, dbapi20_tpc
 
 
 @pytest.fixture(scope="class")
@@ -18,7 +20,7 @@ def with_dsn(request, session_dsn):
 class PsycopgTests(dbapi20.DatabaseAPI20Test):
     driver = psycopg
     # connect_args = () # set by the fixture
-    connect_kw_args: Dict[str, Any] = {}
+    connect_kw_args: dict[Any, Any] = {}
 
     def test_nextset(self):
         # tested elsewhere
@@ -122,28 +124,29 @@ def test_time_from_ticks(ticks, want):
     [
         ((), {}, ""),
         (("",), {}, ""),
-        (("host=foo user=bar",), {}, "host=foo user=bar"),
-        (("host=foo",), {"user": "baz"}, "host=foo user=baz"),
+        (("host=foo.com user=bar",), {}, "host=foo.com user=bar hostaddr=1.1.1.1"),
+        (("host=foo.com",), {"user": "baz"}, "host=foo.com user=baz hostaddr=1.1.1.1"),
         (
-            ("host=foo port=5432",),
-            {"host": "qux", "user": "joe"},
-            "host=qux user=joe port=5432",
+            ("host=foo.com port=5433",),
+            {"host": "qux.com", "user": "joe"},
+            "host=qux.com user=joe port=5433 hostaddr=2.2.2.2",
         ),
-        (("host=foo",), {"user": None}, "host=foo"),
+        (("host=foo.com",), {"user": None}, "host=foo.com hostaddr=1.1.1.1"),
     ],
 )
-def test_connect_args(monkeypatch, pgconn, args, kwargs, want):
-    the_conninfo: str
+def test_connect_args(monkeypatch, pgconn, args, kwargs, want, setpgenv, fake_resolve):
+    got_conninfo: str
 
-    def fake_connect(conninfo):
-        nonlocal the_conninfo
-        the_conninfo = conninfo
+    def fake_connect(conninfo, *, timeout=0.0):
+        nonlocal got_conninfo
+        got_conninfo = conninfo
         return pgconn
         yield
 
-    monkeypatch.setattr(psycopg.connection, "connect", fake_connect)
+    setpgenv({})
+    monkeypatch.setattr(psycopg.generators, "connect", fake_connect)
     conn = psycopg.connect(*args, **kwargs)
-    assert conninfo_to_dict(the_conninfo) == conninfo_to_dict(want)
+    assert conninfo_to_dict(got_conninfo) == conninfo_to_dict(want)
     conn.close()
 
 
@@ -156,9 +159,5 @@ def test_connect_args(monkeypatch, pgconn, args, kwargs, want):
     ],
 )
 def test_connect_badargs(monkeypatch, pgconn, args, kwargs, exctype):
-    def fake_connect(conninfo):
-        return pgconn
-        yield
-
     with pytest.raises(exctype):
         psycopg.connect(*args, **kwargs)

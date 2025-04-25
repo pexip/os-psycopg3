@@ -4,6 +4,7 @@ import socket
 import logging
 import subprocess as sp
 from shutil import which
+from contextlib import contextmanager
 
 import pytest
 
@@ -14,10 +15,10 @@ from psycopg import conninfo
 def pytest_collection_modifyitems(items):
     for item in items:
         # TODO: there is a race condition on macOS and Windows in the CI:
-        # listen returns before really listening and tests based on 'deaf_port'
+        # listen returns before really listening and tests based on 'deaf_listen'
         # fail 50% of the times. Just add the 'proxy' mark on these tests
         # because they are already skipped in the CI.
-        if "proxy" in item.fixturenames or "deaf_port" in item.fixturenames:
+        if "proxy" in item.fixturenames:
             item.add_marker(pytest.mark.proxy)
 
 
@@ -37,16 +38,6 @@ def proxy(dsn):
     p.stop()
 
 
-@pytest.fixture
-def deaf_port(dsn):
-    """Return a port number with a socket open but not answering"""
-    with socket.socket(socket.AF_INET) as s:
-        s.bind(("", 0))
-        port = s.getsockname()[1]
-        s.listen(0)
-        yield port
-
-
 class Proxy:
     """
     Proxy a Postgres service for testing purpose.
@@ -58,19 +49,20 @@ class Proxy:
         cdict = conninfo.conninfo_to_dict(server_dsn)
 
         # Get server params
-        host = cdict.get("host") or os.environ.get("PGHOST")
-        self.server_host = host if host and not host.startswith("/") else "localhost"
-        self.server_port = cdict.get("port", "5432")
+        host = cdict.get("host") or os.environ.get("PGHOST", "")
+        assert isinstance(host, str)
+        self.server_host = host if host and not host.startswith("/") else "127.0.0.1"
+        self.server_port = cdict.get("port") or os.environ.get("PGPORT", "5432")
 
         # Get client params
-        self.client_host = "localhost"
+        self.client_host = "127.0.0.1"
         self.client_port = self._get_random_port()
 
         # Make a connection string to the proxy
         cdict["host"] = self.client_host
         cdict["port"] = self.client_port
         cdict["sslmode"] = "disable"  # not supported by the proxy
-        self.client_dsn = conninfo.make_conninfo(**cdict)
+        self.client_dsn = conninfo.make_conninfo("", **cdict)
 
         # The running proxy process
         self.proc = None
@@ -108,6 +100,22 @@ class Proxy:
         self.proc.wait()
         logging.info("proxy stopped")
         self.proc = None
+
+    @contextmanager
+    def deaf_listen(self):
+        """Open the proxy port to listen, but without accepting a connection.
+
+        A connection attempt on the proxy `client_host` and `client_port` will
+        block. Useful to test connection timeouts.
+        """
+        if self.proc:
+            raise Exception("the proxy is already listening")
+
+        with socket.socket(socket.AF_INET) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((self.client_host, self.client_port))
+            s.listen(0)
+            yield s
 
     @classmethod
     def _get_random_port(cls):

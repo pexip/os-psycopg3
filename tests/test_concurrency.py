@@ -8,9 +8,8 @@ import time
 import queue
 import signal
 import threading
-import multiprocessing
 import subprocess as sp
-from typing import List
+import multiprocessing
 
 import pytest
 
@@ -165,7 +164,7 @@ def canceller(conn, errors):
 @pytest.mark.slow
 @pytest.mark.crdb_skip("cancel")
 def test_cancel(conn):
-    errors: List[Exception] = []
+    errors: list[Exception] = []
 
     cur = conn.cursor()
     t = threading.Thread(target=canceller, args=(conn, errors))
@@ -189,7 +188,7 @@ def test_cancel(conn):
 @pytest.mark.slow
 @pytest.mark.crdb_skip("cancel")
 def test_cancel_stream(conn):
-    errors: List[Exception] = []
+    errors: list[Exception] = []
 
     cur = conn.cursor()
     t = threading.Thread(target=canceller, args=(conn, errors))
@@ -213,6 +212,7 @@ def test_cancel_stream(conn):
 
 @pytest.mark.crdb_skip("pg_terminate_backend")
 @pytest.mark.slow
+@pytest.mark.timing
 def test_identify_closure(conn_cls, dsn):
     def closer():
         time.sleep(0.2)
@@ -362,6 +362,48 @@ with psycopg.connect({dsn!r}, application_name={APPNAME!r}) as conn:
 
 @pytest.mark.slow
 @pytest.mark.subprocess
+@pytest.mark.parametrize("itimername, signame", [("ITIMER_REAL", "SIGALRM")])
+def test_eintr(dsn, itimername, signame):
+    try:
+        itimer = int(getattr(signal, itimername))
+        sig = int(getattr(signal, signame))
+    except AttributeError:
+        pytest.skip(f"unknown interrupt timer: {itimername}")
+
+    script = f"""\
+import signal
+import psycopg
+
+def signal_handler(signum, frame):
+    assert signum == {sig!r}
+
+# Install a handler for the signal
+signal.signal({sig!r}, signal_handler)
+
+# Restart system calls interrupted by the signal
+signal.siginterrupt({sig!r}, False)
+
+
+with psycopg.connect({dsn!r}) as conn:
+    # Fire an interrupt signal every 0.25 seconds
+    signal.setitimer({itimer!r}, 0.25, 0.25)
+
+    cur = conn.cursor()
+    cur.execute("select 'ok' from pg_sleep(0.5)")
+    print(cur.fetchone()[0])
+"""
+    cp = sp.run(
+        [sys.executable, "-s"], input=script, text=True, stdout=sp.PIPE, stderr=sp.PIPE
+    )
+    assert "InterruptedError" not in cp.stderr
+    assert (
+        cp.returncode == 0
+    ), f"script terminated with {signal.Signals(abs(cp.returncode)).name}"
+    assert cp.stdout.rstrip() == "ok"
+
+
+@pytest.mark.slow
+@pytest.mark.subprocess
 @pytest.mark.skipif(
     multiprocessing.get_all_start_methods()[0] != "fork",
     reason="problematic behavior only exhibited via fork",
@@ -392,3 +434,86 @@ if __name__ == '__main__':
     env["PYTHONFAULTHANDLER"] = "1"
     out = sp.check_output([sys.executable, "-s", "-c", script], env=env)
     assert out.decode().rstrip() == "[1, 1]"
+
+
+@pytest.mark.slow
+@pytest.mark.crdb("skip")
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Fails with: An operation was attempted on something that is not a socket",
+)
+def test_concurrent_close(dsn, conn):
+    # Test issue #608: concurrent closing shouldn't hang the server
+    # (although, at the moment, it doesn't cancel a running query).
+    pid = conn.info.backend_pid
+    conn.autocommit = True
+
+    def worker():
+        try:
+            conn.execute("select pg_sleep(3)")
+        except psycopg.OperationalError:
+            pass  # expected
+
+    t0 = time.time()
+    th = threading.Thread(target=worker)
+    th.start()
+    time.sleep(0.5)
+    with psycopg.connect(dsn, autocommit=True) as conn1:
+        cur = conn1.execute("select query from pg_stat_activity where pid = %s", [pid])
+        assert cur.fetchone()
+        conn.close()
+        th.join()
+        time.sleep(0.5)
+        t = time.time()
+        # TODO: this check can pass if we issue a cancel on close, which is
+        # a change in behaviour to be considered better.
+        # cur = conn1.execute(
+        #     "select query from pg_stat_activity where pid = %s",
+        #     [pid],
+        # )
+        # assert not cur.fetchone()
+        assert t - t0 < 2
+
+
+@pytest.mark.parametrize("what", ["commit", "rollback", "error"])
+def test_transaction_concurrency(conn, what):
+    conn.autocommit = True
+
+    evs = [threading.Event() for i in range(3)]
+
+    def worker(unlock, wait_on):
+        with pytest.raises(e.ProgrammingError) as ex:
+            with conn.transaction():
+                unlock.set()
+                wait_on.wait()
+                conn.execute("select 1")
+
+                if what == "error":
+                    1 / 0
+                elif what == "rollback":
+                    raise psycopg.Rollback()
+                else:
+                    assert what == "commit"
+
+        if what == "error":
+            assert "transaction rollback" in str(ex.value)
+            assert isinstance(ex.value.__context__, ZeroDivisionError)
+        elif what == "rollback":
+            assert "transaction rollback" in str(ex.value)
+            assert isinstance(ex.value.__context__, psycopg.Rollback)
+        else:
+            assert "transaction commit" in str(ex.value)
+
+    # Start a first transaction in a thread
+    t1 = threading.Thread(target=worker, kwargs={"unlock": evs[0], "wait_on": evs[1]})
+    t1.start()
+    evs[0].wait()
+
+    # Start a nested transaction in a thread
+    t2 = threading.Thread(target=worker, kwargs={"unlock": evs[1], "wait_on": evs[2]})
+    t2.start()
+
+    # Terminate the first transaction before the second does
+    t1.join()
+    evs[2].set()
+    t2.join()

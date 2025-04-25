@@ -305,9 +305,17 @@ Transaction characteristics
 You can set `transaction parameters`__ for the transactions that Psycopg
 handles. They affect the transactions started implicitly by non-autocommit
 transactions and the ones started explicitly by `Connection.transaction()` for
-both autocommit and non-autocommit transactions. Leaving these parameters as
-`!None` will use the server's default behaviour (which is controlled
-by server settings such as default_transaction_isolation__).
+both autocommit and non-autocommit transactions.
+
+.. Warning::
+
+    Transaction parameters :ref:`don't affect autocommit connections
+    <transaction-characteristics-and-autocommit>`, unless a `!transaction()`
+    block is explicitly used.
+
+Leaving these parameters as `!None` will use the server's default behaviour
+(which is controlled by server settings such as
+default_transaction_isolation__).
 
 .. __: https://www.postgresql.org/docs/current/sql-set-transaction.html
 .. __: https://www.postgresql.org/docs/current/runtime-config-client.html
@@ -319,6 +327,10 @@ In order to set these parameters you can use the connection attributes
 `~AsyncConnection.set_isolation_level()` method and similar. The parameters
 can only be changed if there isn't a transaction already active on the
 connection.
+
+.. versionadded:: 3.2
+   Added methods equivalent to setting the properties (such as
+   `~Connection.set_isolation_level()`) on sync connections too.
 
 .. warning::
 

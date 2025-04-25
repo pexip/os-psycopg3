@@ -1,25 +1,27 @@
 """
-Adapers for JSON types.
+Adapters for JSON types.
 """
 
 # Copyright (C) 2020 The Psycopg Team
 
+from __future__ import annotations
+
 import json
-from typing import Any, Callable, Dict, Optional, Tuple, Type, Union
+from typing import Any, Callable
 
-from .. import abc
+from .. import _oids, abc
 from .. import errors as e
-from .. import postgres
 from ..pq import Format
-from ..adapt import Buffer, Dumper, Loader, PyFormat, AdaptersMap
+from ..adapt import AdaptersMap, Buffer, Dumper, Loader, PyFormat
 from ..errors import DataError
+from .._compat import TypeAlias, cache
 
-JsonDumpsFunction = Callable[[Any], Union[str, bytes]]
-JsonLoadsFunction = Callable[[Union[str, bytes]], Any]
+JsonDumpsFunction: TypeAlias = Callable[[Any], "str | bytes"]
+JsonLoadsFunction: TypeAlias = Callable[["str | bytes"], Any]
 
 
 def set_json_dumps(
-    dumps: JsonDumpsFunction, context: Optional[abc.AdaptContext] = None
+    dumps: JsonDumpsFunction, context: abc.AdaptContext | None = None
 ) -> None:
     """
     Set the JSON serialisation function to store JSON objects in the database.
@@ -51,18 +53,14 @@ def set_json_dumps(
             (Jsonb, PyFormat.BINARY),
             (Jsonb, PyFormat.TEXT),
         ]
-        dumper: Type[_JsonDumper]
         for wrapper, format in grid:
             base = _get_current_dumper(adapters, wrapper, format)
-            name = base.__name__
-            if not base.__name__.startswith("Custom"):
-                name = f"Custom{name}"
-            dumper = type(name, (base,), {"_dumps": dumps})
+            dumper = _make_dumper(base, dumps)
             adapters.register_dumper(wrapper, dumper)
 
 
 def set_json_loads(
-    loads: JsonLoadsFunction, context: Optional[abc.AdaptContext] = None
+    loads: JsonLoadsFunction, context: abc.AdaptContext | None = None
 ) -> None:
     """
     Set the JSON parsing function to fetch JSON objects from the database.
@@ -89,16 +87,35 @@ def set_json_loads(
             ("jsonb", JsonbLoader),
             ("jsonb", JsonbBinaryLoader),
         ]
-        loader: Type[_JsonLoader]
         for tname, base in grid:
-            loader = type(f"Custom{base.__name__}", (base,), {"_loads": loads})
+            loader = _make_loader(base, loads)
             context.adapters.register_loader(tname, loader)
+
+
+# Cache all dynamically-generated types to avoid leaks in case the types
+# cannot be GC'd.
+
+
+@cache
+def _make_dumper(base: type[abc.Dumper], dumps: JsonDumpsFunction) -> type[abc.Dumper]:
+    name = base.__name__
+    if not name.startswith("Custom"):
+        name = f"Custom{name}"
+    return type(name, (base,), {"_dumps": dumps})
+
+
+@cache
+def _make_loader(base: type[Loader], loads: JsonLoadsFunction) -> type[Loader]:
+    name = base.__name__
+    if not name.startswith("Custom"):
+        name = f"Custom{name}"
+    return type(name, (base,), {"_loads": loads})
 
 
 class _JsonWrapper:
     __slots__ = ("obj", "dumps")
 
-    def __init__(self, obj: Any, dumps: Optional[JsonDumpsFunction] = None):
+    def __init__(self, obj: Any, dumps: JsonDumpsFunction | None = None):
         self.obj = obj
         self.dumps = dumps
 
@@ -122,11 +139,11 @@ class _JsonDumper(Dumper):
     # set_json_dumps) or by a subclass.
     _dumps: JsonDumpsFunction = json.dumps
 
-    def __init__(self, cls: type, context: Optional[abc.AdaptContext] = None):
+    def __init__(self, cls: type, context: abc.AdaptContext | None = None):
         super().__init__(cls, context)
         self.dumps = self.__class__._dumps
 
-    def dump(self, obj: Any) -> bytes:
+    def dump(self, obj: Any) -> Buffer | None:
         if isinstance(obj, _JsonWrapper):
             dumps = obj.dumps or self.dumps
             obj = obj.obj
@@ -139,24 +156,28 @@ class _JsonDumper(Dumper):
 
 
 class JsonDumper(_JsonDumper):
-    oid = postgres.types["json"].oid
+    oid = _oids.JSON_OID
 
 
 class JsonBinaryDumper(_JsonDumper):
     format = Format.BINARY
-    oid = postgres.types["json"].oid
+    oid = _oids.JSON_OID
 
 
 class JsonbDumper(_JsonDumper):
-    oid = postgres.types["jsonb"].oid
+    oid = _oids.JSONB_OID
 
 
 class JsonbBinaryDumper(_JsonDumper):
     format = Format.BINARY
-    oid = postgres.types["jsonb"].oid
+    oid = _oids.JSONB_OID
 
-    def dump(self, obj: Any) -> bytes:
-        return b"\x01" + super().dump(obj)
+    def dump(self, obj: Any) -> Buffer | None:
+        obj_bytes = super().dump(obj)
+        if obj_bytes is not None:
+            return b"\x01" + obj_bytes
+        else:
+            return None
 
 
 class _JsonLoader(Loader):
@@ -164,7 +185,7 @@ class _JsonLoader(Loader):
     # set_json_loads) or by a subclass.
     _loads: JsonLoadsFunction = json.loads
 
-    def __init__(self, oid: int, context: Optional[abc.AdaptContext] = None):
+    def __init__(self, oid: int, context: abc.AdaptContext | None = None):
         super().__init__(oid, context)
         self.loads = self.__class__._loads
 
@@ -201,14 +222,14 @@ class JsonbBinaryLoader(_JsonLoader):
 
 def _get_current_dumper(
     adapters: AdaptersMap, cls: type, format: PyFormat
-) -> Type[abc.Dumper]:
+) -> type[abc.Dumper]:
     try:
         return adapters.get_dumper(cls, format)
     except e.ProgrammingError:
         return _default_dumpers[cls, format]
 
 
-_default_dumpers: Dict[Tuple[Type[_JsonWrapper], PyFormat], Type[Dumper]] = {
+_default_dumpers: dict[tuple[type[_JsonWrapper], PyFormat], type[Dumper]] = {
     (Json, PyFormat.BINARY): JsonBinaryDumper,
     (Json, PyFormat.TEXT): JsonDumper,
     (Jsonb, PyFormat.BINARY): JsonbBinaryDumper,

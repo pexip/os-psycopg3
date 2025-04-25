@@ -1,14 +1,83 @@
 .. currentmodule:: psycopg
 
+
+.. index:: threads
+
+.. _concurrency:
+
+Concurrent operations
+=====================
+
+Psycopg allows to write *concurrent* code, executing more than one operation
+at time.
+
+- `Connection` objects *are thread-safe*: more than one thread at time can use
+  the same connection. Different thread can use the same connection by
+  creating different cursors.
+
+- `Cursor` objects *are not thread-safe*, and are not designed to be used by
+  several threads at the same time. However, cursors are lightweight objects:
+  different threads can create each one its own cursor to use independently
+  from other threads.
+
+.. note::
+
+    All the cursors that share the same connection *will also share the same
+    transaction*. This means that, if a thread starts a transaction, every
+    cursor on the same connection will execute their queries in the same
+    transaction and, if one thread causes a database server error, all the
+    other cursors will be in error state until transaction rollback.
+
+    It also means that every cursor will see changes made in the same session
+    by other cursors, even if the transaction is still uncommitted. This
+    effect might be desirable or not, and is something to consider when
+    deciding whether to share a connection or not.
+
+.. hint::
+
+    Should you use many cursors or many connections?
+
+    Query execution and results retrieval on a connection is serialized: only
+    one cursor at time will be able to run a query on the same connection (the
+    `!Connection` object will coordinate different cursors' access). If your
+    program runs a mix of database and non-database operations in several
+    threads, then these threads might be able to share the same connection.
+    However, if you expect to execute massively parallel operations on the
+    database, it might be useful to use more than one connection at time,
+    rather than many cursors on the same connection (or a mix of both).
+
+    Using several connections, however, has an impact on the server's
+    performance and usually the number of connections that a server can handle
+    is limited by grumpy sysadmins with long beards and a strict control on
+    the `max_connections`__ server setting.
+
+    If you want to use more than one connection at time, but still avoid to
+    create too many connections and starve the server, you might want to use a
+    :ref:`connection pool <connection-pools>`.
+
+    .. __: https://www.postgresql.org/docs/current/runtime-config-connection.html#GUC-MAX-CONNECTIONS
+
+.. warning::
+
+    *Connections are not process-safe* and cannot be shared across processes,
+    for instance using the facilities of the `multiprocessing` module.
+
+    If you are using Psycopg in a forking framework (for instance in a web
+    server that implements concurrency using multiprocessing), you should make
+    sure that the database connections are created after the worker process is
+    forked. Failing to do so you will probably find the connection in broken
+    state.
+
+
 .. index:: asyncio
 
 .. _async:
 
 Asynchronous operations
-=======================
+-----------------------
 
-Psycopg `~Connection` and `~Cursor` have counterparts `~AsyncConnection` and
-`~AsyncCursor` supporting an `asyncio` interface.
+Psycopg `Connection` and `Cursor` have counterparts `AsyncConnection` and
+`AsyncCursor` supporting an `asyncio` interface.
 
 The design of the asynchronous objects is pretty much the same of the sync
 ones: in order to use them you will only have to scatter the `!await` keyword
@@ -27,6 +96,12 @@ here and there.
             # will return (1, 100, "abc'def")
             async for record in acur:
                 print(record)
+
+An `!AsyncConnection` can be used by several `asyncio.Task` at the same time.
+However, as with threads, all the `AsyncCursor` on the same connection will
+share the same session and will have their access to the connection
+serialized.
+
 
 .. versionchanged:: 3.1
 
@@ -113,30 +188,57 @@ you can use the normal `async with` context manager.
 
 .. _async-ctrl-c:
 
-Interrupting async operations using Ctrl-C
-------------------------------------------
+Interrupting async operations
+-----------------------------
 
 If a long running operation is interrupted by a Ctrl-C on a normal connection
 running in the main thread, the operation will be cancelled and the connection
 will be put in error state, from which can be recovered with a normal
 `~Connection.rollback()`.
 
-If the query is running in an async connection, a Ctrl-C will be likely
-intercepted by the async loop and interrupt the whole program. In order to
-emulate what normally happens with blocking connections, you can use
-`asyncio's add_signal_handler()`__, to call `Connection.cancel()`:
+An async connection provides similar behavior in that if the async task is
+cancelled, any operation on the connection will similarly be cancelled.  This
+can happen either indirectly via Ctrl-C or similar signal, or directly by
+cancelling the Python Task via the normal way.  Psycopg will ask the
+PostgreSQL postmaster to cancel the operation when it encounters the standard
+Python `CancelledError`__.
 
-.. code:: python
+Remember that cancelling the Python Task does not guarantee that the operation
+will not complete, even if the task ultimately exits prematurely due to
+CancelledError.  If you need to know the ultimate outcome of the statement,
+then consider calling `Connection.cancel()` as an alternative to cancelling
+the task.
 
-    import asyncio
-    import signal
-
-    async with await psycopg.AsyncConnection.connect() as conn:
-        loop.add_signal_handler(signal.SIGINT, conn.cancel)
-        ...
+Previous versions of Psycopg recommended setting up signal handlers to
+manually cancel connections.  This should no longer be necessary.
 
 
-.. __: https://docs.python.org/3/library/asyncio-eventloop.html#asyncio.loop.add_signal_handler
+.. __: https://docs.python.org/3/library/asyncio-task.html#task-cancellation
+
+
+.. index:: gevent
+
+.. _gevent:
+
+Gevent support
+--------------
+
+Psycopg 3 supports `gevent <https://www.gevent.org/>`__ out of the box. If the
+`select` module is found patched by functions such as
+`gevent.monkey.patch_select()`__ or `patch_all()`__, psycopg will behave in a
+collaborative way.
+
+Unlike with `!psycopg2`, using the `!psycogreen` module is not required.
+
+.. __: http://www.gevent.org/api/gevent.monkey.html#gevent.monkey.patch_select
+.. __: http://www.gevent.org/api/gevent.monkey.html#gevent.monkey.patch_all
+
+.. warning::
+
+    gevent support was initially accidental, and was accidentally broken in
+    psycopg 3.1.4.
+
+    gevent is officially supported only starting from psycopg 3.1.14.
 
 
 .. index::
@@ -225,14 +327,15 @@ of communication.
 .. |NOTIFY| replace:: :sql:`NOTIFY`
 .. _NOTIFY: https://www.postgresql.org/docs/current/sql-notify.html
 
-Because of the way sessions interact with notifications (see |NOTIFY|_
+Because of the way transactions interact with notifications (see |NOTIFY|_
 documentation), you should keep the connection in `~Connection.autocommit`
 mode if you wish to receive or send notifications in a timely manner.
 
 Notifications are received as instances of `Notify`. If you are reserving a
 connection only to receive notifications, the simplest way is to consume the
 `Connection.notifies` generator. The generator can be stopped using
-`!close()`.
+`!close()`. Starting from Psycopg 3.2, the method supports options to receive
+notifications only for a certain time or up to a certain number.
 
 .. note::
 

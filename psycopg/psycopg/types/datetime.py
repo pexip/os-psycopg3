@@ -4,30 +4,32 @@ Adapters for date/time types.
 
 # Copyright (C) 2020 The Psycopg Team
 
+from __future__ import annotations
+
 import re
 import struct
+from typing import TYPE_CHECKING, Any, Callable, cast
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Any, Callable, cast, Optional, Tuple, TYPE_CHECKING
 
-from .. import postgres
+from .. import _oids
 from ..pq import Format
 from .._tz import get_tzinfo
 from ..abc import AdaptContext, DumperKey
 from ..adapt import Buffer, Dumper, Loader, PyFormat
-from ..errors import InterfaceError, DataError
+from ..errors import DataError, InterfaceError
 from .._struct import pack_int4, pack_int8, unpack_int4, unpack_int8
 
 if TYPE_CHECKING:
-    from ..connection import BaseConnection
+    from .._connection_base import BaseConnection
 
 _struct_timetz = struct.Struct("!qi")  # microseconds, sec tz offset
 _pack_timetz = cast(Callable[[int, int], bytes], _struct_timetz.pack)
-_unpack_timetz = cast(Callable[[Buffer], Tuple[int, int]], _struct_timetz.unpack)
+_unpack_timetz = cast(Callable[[Buffer], "tuple[int, int]"], _struct_timetz.unpack)
 
 _struct_interval = struct.Struct("!qii")  # microseconds, days, months
 _pack_interval = cast(Callable[[int, int, int], bytes], _struct_interval.pack)
 _unpack_interval = cast(
-    Callable[[Buffer], Tuple[int, int, int]], _struct_interval.unpack
+    Callable[[Buffer], "tuple[int, int, int]"], _struct_interval.unpack
 )
 
 utc = timezone.utc
@@ -38,9 +40,9 @@ _py_date_min_days = date.min.toordinal()
 
 
 class DateDumper(Dumper):
-    oid = postgres.types["date"].oid
+    oid = _oids.DATE_OID
 
-    def dump(self, obj: date) -> bytes:
+    def dump(self, obj: date) -> Buffer | None:
         # NOTE: whatever the PostgreSQL DateStyle input format (DMY, MDY, YMD)
         # the YYYY-MM-DD is always understood correctly.
         return str(obj).encode()
@@ -48,9 +50,9 @@ class DateDumper(Dumper):
 
 class DateBinaryDumper(Dumper):
     format = Format.BINARY
-    oid = postgres.types["date"].oid
+    oid = _oids.DATE_OID
 
-    def dump(self, obj: date) -> bytes:
+    def dump(self, obj: date) -> Buffer | None:
         days = obj.toordinal() - _pg_date_epoch_days
         return pack_int4(days)
 
@@ -67,14 +69,22 @@ class _BaseTimeDumper(Dumper):
     def upgrade(self, obj: time, format: PyFormat) -> Dumper:
         raise NotImplementedError
 
+    def _get_offset(self, obj: time) -> timedelta:
+        offset = obj.utcoffset()
+        if offset is None:
+            raise DataError(
+                f"cannot calculate the offset of tzinfo '{obj.tzinfo}' without a date"
+            )
+        return offset
+
 
 class _BaseTimeTextDumper(_BaseTimeDumper):
-    def dump(self, obj: time) -> bytes:
+    def dump(self, obj: time) -> Buffer | None:
         return str(obj).encode()
 
 
 class TimeDumper(_BaseTimeTextDumper):
-    oid = postgres.types["time"].oid
+    oid = _oids.TIME_OID
 
     def upgrade(self, obj: time, format: PyFormat) -> Dumper:
         if not obj.tzinfo:
@@ -84,14 +94,18 @@ class TimeDumper(_BaseTimeTextDumper):
 
 
 class TimeTzDumper(_BaseTimeTextDumper):
-    oid = postgres.types["timetz"].oid
+    oid = _oids.TIMETZ_OID
+
+    def dump(self, obj: time) -> Buffer | None:
+        self._get_offset(obj)
+        return super().dump(obj)
 
 
 class TimeBinaryDumper(_BaseTimeDumper):
     format = Format.BINARY
-    oid = postgres.types["time"].oid
+    oid = _oids.TIME_OID
 
-    def dump(self, obj: time) -> bytes:
+    def dump(self, obj: time) -> Buffer | None:
         us = obj.microsecond + 1_000_000 * (
             obj.second + 60 * (obj.minute + 60 * obj.hour)
         )
@@ -106,14 +120,13 @@ class TimeBinaryDumper(_BaseTimeDumper):
 
 class TimeTzBinaryDumper(_BaseTimeDumper):
     format = Format.BINARY
-    oid = postgres.types["timetz"].oid
+    oid = _oids.TIMETZ_OID
 
-    def dump(self, obj: time) -> bytes:
+    def dump(self, obj: time) -> Buffer | None:
         us = obj.microsecond + 1_000_000 * (
             obj.second + 60 * (obj.minute + 60 * obj.hour)
         )
-        off = obj.utcoffset()
-        assert off is not None
+        off = self._get_offset(obj)
         return _pack_timetz(us, -int(off.total_seconds()))
 
 
@@ -131,14 +144,14 @@ class _BaseDatetimeDumper(Dumper):
 
 
 class _BaseDatetimeTextDumper(_BaseDatetimeDumper):
-    def dump(self, obj: datetime) -> bytes:
+    def dump(self, obj: datetime) -> Buffer | None:
         # NOTE: whatever the PostgreSQL DateStyle input format (DMY, MDY, YMD)
         # the YYYY-MM-DD is always understood correctly.
         return str(obj).encode()
 
 
 class DatetimeDumper(_BaseDatetimeTextDumper):
-    oid = postgres.types["timestamptz"].oid
+    oid = _oids.TIMESTAMPTZ_OID
 
     def upgrade(self, obj: datetime, format: PyFormat) -> Dumper:
         if obj.tzinfo:
@@ -148,14 +161,14 @@ class DatetimeDumper(_BaseDatetimeTextDumper):
 
 
 class DatetimeNoTzDumper(_BaseDatetimeTextDumper):
-    oid = postgres.types["timestamp"].oid
+    oid = _oids.TIMESTAMP_OID
 
 
 class DatetimeBinaryDumper(_BaseDatetimeDumper):
     format = Format.BINARY
-    oid = postgres.types["timestamptz"].oid
+    oid = _oids.TIMESTAMPTZ_OID
 
-    def dump(self, obj: datetime) -> bytes:
+    def dump(self, obj: datetime) -> Buffer | None:
         delta = obj - _pg_datetimetz_epoch
         micros = delta.microseconds + 1_000_000 * (86_400 * delta.days + delta.seconds)
         return pack_int8(micros)
@@ -169,32 +182,35 @@ class DatetimeBinaryDumper(_BaseDatetimeDumper):
 
 class DatetimeNoTzBinaryDumper(_BaseDatetimeDumper):
     format = Format.BINARY
-    oid = postgres.types["timestamp"].oid
+    oid = _oids.TIMESTAMP_OID
 
-    def dump(self, obj: datetime) -> bytes:
+    def dump(self, obj: datetime) -> Buffer | None:
         delta = obj - _pg_datetime_epoch
         micros = delta.microseconds + 1_000_000 * (86_400 * delta.days + delta.seconds)
         return pack_int8(micros)
 
 
 class TimedeltaDumper(Dumper):
-    oid = postgres.types["interval"].oid
+    oid = _oids.INTERVAL_OID
 
-    def __init__(self, cls: type, context: Optional[AdaptContext] = None):
+    def __init__(self, cls: type, context: AdaptContext | None = None):
         super().__init__(cls, context)
-        if self.connection:
-            if (
-                self.connection.pgconn.parameter_status(b"IntervalStyle")
-                == b"sql_standard"
-            ):
-                setattr(self, "dump", self._dump_sql)
+        if _get_intervalstyle(self.connection) == b"sql_standard":
+            self._dump_method = self._dump_sql
+        else:
+            self._dump_method = self._dump_any
 
-    def dump(self, obj: timedelta) -> bytes:
+    def dump(self, obj: timedelta) -> Buffer | None:
+        return self._dump_method(self, obj)
+
+    @staticmethod
+    def _dump_any(self: TimedeltaDumper, obj: timedelta) -> bytes:
         # The comma is parsed ok by PostgreSQL but it's not documented
         # and it seems brittle to rely on it. CRDB doesn't consume it well.
         return str(obj).encode().replace(b",", b"")
 
-    def _dump_sql(self, obj: timedelta) -> bytes:
+    @staticmethod
+    def _dump_sql(self: TimedeltaDumper, obj: timedelta) -> bytes:
         # sql_standard format needs explicit signs
         # otherwise -1 day 1 sec will mean -1 sec
         return b"%+d day %+d second %+d microsecond" % (
@@ -206,9 +222,9 @@ class TimedeltaDumper(Dumper):
 
 class TimedeltaBinaryDumper(Dumper):
     format = Format.BINARY
-    oid = postgres.types["interval"].oid
+    oid = _oids.INTERVAL_OID
 
-    def dump(self, obj: timedelta) -> bytes:
+    def dump(self, obj: timedelta) -> Buffer | None:
         micros = 1_000_000 * obj.seconds + obj.microseconds
         return _pack_interval(micros, obj.days, 0)
 
@@ -218,7 +234,7 @@ class DateLoader(Loader):
     _ORDER_DMY = 1
     _ORDER_MDY = 2
 
-    def __init__(self, oid: int, context: Optional[AdaptContext] = None):
+    def __init__(self, oid: int, context: AdaptContext | None = None):
         super().__init__(oid, context)
         ds = _get_datestyle(self.connection)
         if ds.startswith(b"I"):  # ISO
@@ -397,7 +413,7 @@ class TimestampLoader(Loader):
     _ORDER_PGDM = 3
     _ORDER_PGMD = 4
 
-    def __init__(self, oid: int, context: Optional[AdaptContext] = None):
+    def __init__(self, oid: int, context: AdaptContext | None = None):
         super().__init__(oid, context)
 
         ds = _get_datestyle(self.connection)
@@ -479,15 +495,21 @@ class TimestamptzLoader(Loader):
         """
     )
 
-    def __init__(self, oid: int, context: Optional[AdaptContext] = None):
+    def __init__(self, oid: int, context: AdaptContext | None = None):
         super().__init__(oid, context)
         self._timezone = get_tzinfo(self.connection.pgconn if self.connection else None)
 
         ds = _get_datestyle(self.connection)
-        if not ds.startswith(b"I"):  # not ISO
-            setattr(self, "load", self._load_notimpl)
+        if ds.startswith(b"I"):  # ISO
+            self._load_method = self._load_iso
+        else:
+            self._load_method = self._load_notimpl
 
     def load(self, data: Buffer) -> datetime:
+        return self._load_method(self, data)
+
+    @staticmethod
+    def _load_iso(self: TimestamptzLoader, data: Buffer) -> datetime:
         m = self._re_format.match(data)
         if not m:
             raise _get_timestamp_load_error(self.connection, data) from None
@@ -533,7 +555,8 @@ class TimestamptzLoader(Loader):
 
         raise _get_timestamp_load_error(self.connection, data, ex) from None
 
-    def _load_notimpl(self, data: Buffer) -> datetime:
+    @staticmethod
+    def _load_notimpl(self: TimestamptzLoader, data: Buffer) -> datetime:
         s = bytes(data).decode("utf8", "replace")
         ds = _get_datestyle(self.connection).decode("ascii")
         raise NotImplementedError(
@@ -544,7 +567,7 @@ class TimestamptzLoader(Loader):
 class TimestamptzBinaryLoader(Loader):
     format = Format.BINARY
 
-    def __init__(self, oid: int, context: Optional[AdaptContext] = None):
+    def __init__(self, oid: int, context: AdaptContext | None = None):
         super().__init__(oid, context)
         self._timezone = get_tzinfo(self.connection.pgconn if self.connection else None)
 
@@ -589,14 +612,18 @@ class IntervalLoader(Loader):
         re.VERBOSE,
     )
 
-    def __init__(self, oid: int, context: Optional[AdaptContext] = None):
+    def __init__(self, oid: int, context: AdaptContext | None = None):
         super().__init__(oid, context)
-        if self.connection:
-            ints = self.connection.pgconn.parameter_status(b"IntervalStyle")
-            if ints != b"postgres":
-                setattr(self, "load", self._load_notimpl)
+        if _get_intervalstyle(self.connection) == b"postgres":
+            self._load_method = self._load_postgres
+        else:
+            self._load_method = self._load_notimpl
 
     def load(self, data: Buffer) -> timedelta:
+        return self._load_method(self, data)
+
+    @staticmethod
+    def _load_postgres(self: IntervalLoader, data: Buffer) -> timedelta:
         m = self._re_interval.match(data)
         if not m:
             s = bytes(data).decode("utf8", "replace")
@@ -624,13 +651,10 @@ class IntervalLoader(Loader):
             s = bytes(data).decode("utf8", "replace")
             raise DataError(f"can't parse interval {s!r}: {e}") from None
 
-    def _load_notimpl(self, data: Buffer) -> timedelta:
+    @staticmethod
+    def _load_notimpl(self: IntervalLoader, data: Buffer) -> timedelta:
         s = bytes(data).decode("utf8", "replace")
-        ints = (
-            self.connection
-            and self.connection.pgconn.parameter_status(b"IntervalStyle")
-            or b"unknown"
-        ).decode("utf8", "replace")
+        ints = _get_intervalstyle(self.connection).decode("utf8", "replace")
         raise NotImplementedError(
             f"can't parse interval with IntervalStyle {ints}: {s!r}"
         )
@@ -654,7 +678,7 @@ class IntervalBinaryLoader(Loader):
             raise DataError(f"can't parse interval: {e}") from None
 
 
-def _get_datestyle(conn: Optional["BaseConnection[Any]"]) -> bytes:
+def _get_datestyle(conn: BaseConnection[Any] | None) -> bytes:
     if conn:
         ds = conn.pgconn.parameter_status(b"DateStyle")
         if ds:
@@ -663,8 +687,17 @@ def _get_datestyle(conn: Optional["BaseConnection[Any]"]) -> bytes:
     return b"ISO, DMY"
 
 
+def _get_intervalstyle(conn: BaseConnection[Any] | None) -> bytes:
+    if conn:
+        ints = conn.pgconn.parameter_status(b"IntervalStyle")
+        if ints:
+            return ints
+
+    return b"unknown"
+
+
 def _get_timestamp_load_error(
-    conn: Optional["BaseConnection[Any]"], data: Buffer, ex: Optional[Exception] = None
+    conn: BaseConnection[Any] | None, data: Buffer, ex: Exception | None = None
 ) -> Exception:
     s = bytes(data).decode("utf8", "replace")
 

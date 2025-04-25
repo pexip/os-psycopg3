@@ -1,13 +1,17 @@
 """
-Prepared statements tests on async connections
+Prepared statements tests
 """
 
+import sys
+import logging
 import datetime as dt
 from decimal import Decimal
 
 import pytest
 
+import psycopg
 from psycopg.rows import namedtuple_row
+from psycopg.pq._debug import PGconnDebug
 
 
 @pytest.mark.parametrize("value", [None, 0, 3])
@@ -89,6 +93,16 @@ async def test_no_prepare_multi(aconn):
     assert res == [0] * 10
 
 
+async def test_no_prepare_multi_with_drop(aconn):
+    await aconn.execute("select 1", prepare=True)
+
+    for i in range(10):
+        await aconn.execute("drop table if exists noprep; create table noprep()")
+
+    stmts = await get_prepared_statements(aconn)
+    assert len(stmts) == 0
+
+
 async def test_no_prepare_error(aconn):
     await aconn.set_autocommit(True)
     for i in range(10):
@@ -164,6 +178,45 @@ async def test_evict_lru_deallocate(aconn):
     assert got == [f"select {i}" for i in ["'a'", 6, 7, 8, 9]]
 
 
+@pytest.mark.skipif("psycopg._cmodule._psycopg", reason="Python-only debug conn")
+async def test_deallocate_or_close(aconn, caplog):
+    aconn.pgconn = PGconnDebug(aconn.pgconn)
+    caplog.set_level(logging.INFO, logger="psycopg.debug")
+
+    await aconn.set_autocommit(True)
+    aconn.prepare_threshold = 0
+    aconn.prepared_max = 1
+
+    await aconn.execute("select 1::bigint")
+    await aconn.execute("select 1::text")
+
+    msgs = "\n".join(rec.message for rec in caplog.records)
+    if psycopg.pq.__build_version__ >= 170000:
+        assert "PGconn.send_close_prepared" in msgs
+        assert "DEALLOCATE" not in msgs
+    else:
+        assert "PGconn.send_close_prepared" not in msgs
+        assert "DEALLOCATE" in msgs
+
+
+def test_prepared_max_none(conn):
+    conn.prepared_max = 42
+    assert conn.prepared_max == 42
+    assert conn._prepared.prepared_max == 42
+
+    conn.prepared_max = None
+    assert conn._prepared.prepared_max == sys.maxsize
+    assert conn.prepared_max is None
+
+    conn.prepared_max = 0
+    assert conn._prepared.prepared_max == 0
+    assert conn.prepared_max == 0
+
+    conn.prepared_max = 24
+    assert conn.prepared_max == 24
+    assert conn._prepared.prepared_max == 24
+
+
 async def test_different_types(aconn):
     aconn.prepare_threshold = 0
     await aconn.execute("select %s", [None])
@@ -189,12 +242,77 @@ async def test_untyped_json(aconn):
     assert got == [["jsonb"]]
 
 
+async def test_change_type_execute(aconn):
+    aconn.prepare_threshold = 0
+    for i in range(3):
+        await aconn.execute("CREATE TYPE prepenum AS ENUM ('foo', 'bar', 'baz')")
+        await aconn.execute("CREATE TABLE preptable(id integer, bar prepenum[])")
+        await aconn.cursor().execute(
+            "INSERT INTO preptable (bar) VALUES (%(enum_col)s::prepenum[])",
+            {"enum_col": ["foo"]},
+        )
+        await aconn.rollback()
+
+
+async def test_change_type_executemany(aconn):
+    for i in range(3):
+        await aconn.execute("CREATE TYPE prepenum AS ENUM ('foo', 'bar', 'baz')")
+        await aconn.execute("CREATE TABLE preptable(id integer, bar prepenum[])")
+        await aconn.cursor().executemany(
+            "INSERT INTO preptable (bar) VALUES (%(enum_col)s::prepenum[])",
+            [{"enum_col": ["foo"]}, {"enum_col": ["foo", "bar"]}],
+        )
+        await aconn.rollback()
+
+
+@pytest.mark.crdb("skip", reason="can't re-create a type")
+async def test_change_type(aconn):
+    aconn.prepare_threshold = 0
+    await aconn.execute("CREATE TYPE prepenum AS ENUM ('foo', 'bar', 'baz')")
+    await aconn.execute("CREATE TABLE preptable(id integer, bar prepenum[])")
+    await aconn.cursor().execute(
+        "INSERT INTO preptable (bar) VALUES (%(enum_col)s::prepenum[])",
+        {"enum_col": ["foo"]},
+    )
+    await aconn.execute("DROP TABLE preptable")
+    await aconn.execute("DROP TYPE prepenum")
+    await aconn.execute("CREATE TYPE prepenum AS ENUM ('foo', 'bar', 'baz')")
+    await aconn.execute("CREATE TABLE preptable(id integer, bar prepenum[])")
+    await aconn.cursor().execute(
+        "INSERT INTO preptable (bar) VALUES (%(enum_col)s::prepenum[])",
+        {"enum_col": ["foo"]},
+    )
+
+    stmts = await get_prepared_statements(aconn)
+    assert len(stmts) == 3
+
+
+async def test_change_type_savepoint(aconn):
+    aconn.prepare_threshold = 0
+    async with aconn.transaction():
+        for i in range(3):
+            with pytest.raises(ZeroDivisionError):
+                async with aconn.transaction():
+                    await aconn.execute(
+                        "CREATE TYPE prepenum AS ENUM ('foo', 'bar', 'baz')"
+                    )
+                    await aconn.execute(
+                        "CREATE TABLE preptable(id integer, bar prepenum[])"
+                    )
+                    await aconn.cursor().execute(
+                        "INSERT INTO preptable (bar) VALUES (%(enum_col)s::prepenum[])",
+                        {"enum_col": ["foo"]},
+                    )
+                    raise ZeroDivisionError()
+
+
 async def get_prepared_statements(aconn):
     cur = aconn.cursor(row_factory=namedtuple_row)
+    # CRDB has 'PREPARE name AS' in the statement.
     await cur.execute(
-        r"""
+        """
 select name,
-    regexp_replace(statement, 'prepare _pg3_\d+ as ', '', 'i') as statement,
+    regexp_replace(statement, 'prepare _pg3_\\d+ as ', '', 'i') as statement,
     prepare_time,
     parameter_types
 from pg_prepared_statements

@@ -18,33 +18,33 @@ DBAPI-defined Exceptions are defined in the following hierarchy::
 
 # Copyright (C) 2020 The Psycopg Team
 
-from dataclasses import dataclass, field, fields
-from typing import Any, Callable, Dict, List, NoReturn, Optional, Sequence, Tuple, Type
-from typing import Union, TYPE_CHECKING
-from typing_extensions import TypeAlias
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, Callable, NoReturn, Sequence
 from asyncio import CancelledError
+from dataclasses import dataclass, field, fields
 
 from .pq.abc import PGconn, PGresult
+from ._compat import TypeAlias, TypeGuard
 from .pq._enums import ConnStatus, DiagnosticField, PipelineStatus, TransactionStatus
-from ._compat import TypeGuard
 
 if TYPE_CHECKING:
-    from .pq.misc import PGnotify, ConninfoOption
+    from .pq.misc import ConninfoOption, PGnotify
 
-ErrorInfo: TypeAlias = Union[None, PGresult, Dict[int, Optional[bytes]]]
+ErrorInfo: TypeAlias = "PGresult | dict[int, bytes | None] | None"
 
-_sqlcodes: Dict[str, "Type[Error]"] = {}
+_sqlcodes: dict[str, type[Error]] = {}
 
 
 @dataclass
 class FinishedPGconn:
     """Finished libpq connection.
 
-    Attributes are set from a real `~pscopg.pq.PGconn` but any operations will
+    Attributes are set from a real `~psycopg.pq.PGconn` but any operations will
     raise an `~psycopg.OperationalError`.
     """
 
-    info: List["ConninfoOption"] = field(default_factory=list)
+    info: list[ConninfoOption] = field(default_factory=list)
 
     db: bytes = b""
     user: bytes = b""
@@ -59,6 +59,7 @@ class FinishedPGconn:
     pipeline_status: int = PipelineStatus.OFF.value
 
     error_message: bytes = b""
+    _encoding: str = "utf-8"
     server_version: int = 0
 
     backend_pid: int = 0
@@ -68,8 +69,8 @@ class FinishedPGconn:
 
     nonblocking: int = 0
 
-    notice_handler: Optional[Callable[["PGresult"], None]] = None
-    notify_handler: Optional[Callable[["PGnotify"], None]] = None
+    notice_handler: Callable[[PGresult], None] | None = None
+    notify_handler: Callable[[PGnotify], None] | None = None
 
     @staticmethod
     def _raise() -> NoReturn:
@@ -91,6 +92,9 @@ class FinishedPGconn:
 
     def reset(self) -> NoReturn:
         self._raise()
+
+    def get_error_message(self, encoding: str = "") -> str:
+        return "the connection is closed"
 
     def reset_start(self) -> NoReturn:
         self._raise()
@@ -145,6 +149,18 @@ class FinishedPGconn:
     def send_describe_portal(self, *args: Any) -> NoReturn:
         self._raise()
 
+    def close_prepared(self, *args: Any) -> NoReturn:
+        self._raise()
+
+    def send_close_prepared(self, *args: Any) -> NoReturn:
+        self._raise()
+
+    def close_portal(self, *args: Any) -> NoReturn:
+        self._raise()
+
+    def send_close_portal(self, *args: Any) -> NoReturn:
+        self._raise()
+
     def get_result(self) -> NoReturn:
         self._raise()
 
@@ -158,6 +174,12 @@ class FinishedPGconn:
         self._raise()
 
     def set_single_row_mode(self) -> NoReturn:
+        self._raise()
+
+    def set_chunked_rows_mode(self, size: int) -> NoReturn:
+        self._raise()
+
+    def cancel_conn(self) -> NoReturn:
         self._raise()
 
     def get_cancel(self) -> NoReturn:
@@ -185,6 +207,9 @@ class FinishedPGconn:
         self._raise()
 
     def encrypt_password(self, *args: Any) -> NoReturn:
+        self._raise()
+
+    def change_password(self, *args: Any) -> NoReturn:
         self._raise()
 
     def make_empty_result(self, *args: Any) -> NoReturn:
@@ -236,14 +261,14 @@ class Error(Exception):
 
     __module__ = "psycopg"
 
-    sqlstate: Optional[str] = None
+    sqlstate: str | None = None
 
     def __init__(
         self,
         *args: Sequence[Any],
         info: ErrorInfo = None,
         encoding: str = "utf-8",
-        pgconn: Optional[PGconn] = None,
+        pgconn: PGconn | None = None,
     ):
         super().__init__(*args)
         self._info = info
@@ -255,29 +280,29 @@ class Error(Exception):
             self.sqlstate = self.diag.sqlstate
 
     @property
-    def pgconn(self) -> Optional[PGconn]:
+    def pgconn(self) -> PGconn | None:
         """The connection object, if the error was raised from a connection attempt.
 
-        :rtype: Optional[psycopg.pq.PGconn]
+        :rtype: psycopg.pq.PGconn | None
         """
         return self._pgconn if self._pgconn else None
 
     @property
-    def pgresult(self) -> Optional[PGresult]:
+    def pgresult(self) -> PGresult | None:
         """The result object, if the exception was raised after a failed query.
 
-        :rtype: Optional[psycopg.pq.PGresult]
+        :rtype: psycopg.pq.PGresult | None
         """
         return self._info if _is_pgresult(self._info) else None
 
     @property
-    def diag(self) -> "Diagnostic":
+    def diag(self) -> Diagnostic:
         """
         A `Diagnostic` object to inspect details of the errors from the database.
         """
         return Diagnostic(self._info, encoding=self._encoding)
 
-    def __reduce__(self) -> Union[str, Tuple[Any, ...]]:
+    def __reduce__(self) -> str | tuple[Any, ...]:
         res = super().__reduce__()
         if isinstance(res, tuple) and len(res) >= 3:
             # To make the exception picklable
@@ -302,7 +327,7 @@ class DatabaseError(Error):
 
     __module__ = "psycopg"
 
-    def __init_subclass__(cls, code: Optional[str] = None, name: Optional[str] = None):
+    def __init_subclass__(cls, code: str | None = None, name: str | None = None):
         if code:
             _sqlcodes[code] = cls
             cls.sqlstate = code
@@ -384,6 +409,15 @@ class ConnectionTimeout(OperationalError):
     """
 
 
+class CancellationTimeout(OperationalError):
+    """
+    Exception raised on timeout of connection's
+    `~psycopg.Connection.cancel_safe()` method.
+
+    Subclass of `~psycopg.OperationalError`.
+    """
+
+
 class PipelineAborted(OperationalError):
     """
     Raised when a operation fails because the current pipeline is in aborted state.
@@ -400,78 +434,78 @@ class Diagnostic:
         self._encoding = encoding
 
     @property
-    def severity(self) -> Optional[str]:
+    def severity(self) -> str | None:
         return self._error_message(DiagnosticField.SEVERITY)
 
     @property
-    def severity_nonlocalized(self) -> Optional[str]:
+    def severity_nonlocalized(self) -> str | None:
         return self._error_message(DiagnosticField.SEVERITY_NONLOCALIZED)
 
     @property
-    def sqlstate(self) -> Optional[str]:
+    def sqlstate(self) -> str | None:
         return self._error_message(DiagnosticField.SQLSTATE)
 
     @property
-    def message_primary(self) -> Optional[str]:
+    def message_primary(self) -> str | None:
         return self._error_message(DiagnosticField.MESSAGE_PRIMARY)
 
     @property
-    def message_detail(self) -> Optional[str]:
+    def message_detail(self) -> str | None:
         return self._error_message(DiagnosticField.MESSAGE_DETAIL)
 
     @property
-    def message_hint(self) -> Optional[str]:
+    def message_hint(self) -> str | None:
         return self._error_message(DiagnosticField.MESSAGE_HINT)
 
     @property
-    def statement_position(self) -> Optional[str]:
+    def statement_position(self) -> str | None:
         return self._error_message(DiagnosticField.STATEMENT_POSITION)
 
     @property
-    def internal_position(self) -> Optional[str]:
+    def internal_position(self) -> str | None:
         return self._error_message(DiagnosticField.INTERNAL_POSITION)
 
     @property
-    def internal_query(self) -> Optional[str]:
+    def internal_query(self) -> str | None:
         return self._error_message(DiagnosticField.INTERNAL_QUERY)
 
     @property
-    def context(self) -> Optional[str]:
+    def context(self) -> str | None:
         return self._error_message(DiagnosticField.CONTEXT)
 
     @property
-    def schema_name(self) -> Optional[str]:
+    def schema_name(self) -> str | None:
         return self._error_message(DiagnosticField.SCHEMA_NAME)
 
     @property
-    def table_name(self) -> Optional[str]:
+    def table_name(self) -> str | None:
         return self._error_message(DiagnosticField.TABLE_NAME)
 
     @property
-    def column_name(self) -> Optional[str]:
+    def column_name(self) -> str | None:
         return self._error_message(DiagnosticField.COLUMN_NAME)
 
     @property
-    def datatype_name(self) -> Optional[str]:
+    def datatype_name(self) -> str | None:
         return self._error_message(DiagnosticField.DATATYPE_NAME)
 
     @property
-    def constraint_name(self) -> Optional[str]:
+    def constraint_name(self) -> str | None:
         return self._error_message(DiagnosticField.CONSTRAINT_NAME)
 
     @property
-    def source_file(self) -> Optional[str]:
+    def source_file(self) -> str | None:
         return self._error_message(DiagnosticField.SOURCE_FILE)
 
     @property
-    def source_line(self) -> Optional[str]:
+    def source_line(self) -> str | None:
         return self._error_message(DiagnosticField.SOURCE_LINE)
 
     @property
-    def source_function(self) -> Optional[str]:
+    def source_function(self) -> str | None:
         return self._error_message(DiagnosticField.SOURCE_FUNCTION)
 
-    def _error_message(self, field: DiagnosticField) -> Optional[str]:
+    def _error_message(self, field: DiagnosticField) -> str | None:
         if self._info:
             if isinstance(self._info, dict):
                 val = self._info.get(field)
@@ -483,7 +517,7 @@ class Diagnostic:
 
         return None
 
-    def __reduce__(self) -> Union[str, Tuple[Any, ...]]:
+    def __reduce__(self) -> str | tuple[Any, ...]:
         res = super().__reduce__()
         if isinstance(res, tuple) and len(res) >= 3:
             res[2]["_info"] = _info_to_dict(self._info)
@@ -502,7 +536,7 @@ def _info_to_dict(info: ErrorInfo) -> ErrorInfo:
         return info
 
 
-def lookup(sqlstate: str) -> Type[Error]:
+def lookup(sqlstate: str) -> type[Error]:
     """Lookup an error code or `constant name`__ and return its exception class.
 
     Raise `!KeyError` if the code is not found.
@@ -514,15 +548,9 @@ def lookup(sqlstate: str) -> Type[Error]:
 
 
 def error_from_result(result: PGresult, encoding: str = "utf-8") -> Error:
-    from psycopg import pq
-
     state = result.error_field(DiagnosticField.SQLSTATE) or b""
-    cls = _class_for_state(state.decode("ascii"))
-    return cls(
-        pq.error_message(result, encoding=encoding),
-        info=result,
-        encoding=encoding,
-    )
+    cls = _class_for_state(state.decode("utf-8", "replace"))
+    return cls(result.get_error_message(encoding), info=result, encoding=encoding)
 
 
 def _is_pgresult(info: ErrorInfo) -> TypeGuard[PGresult]:
@@ -531,14 +559,14 @@ def _is_pgresult(info: ErrorInfo) -> TypeGuard[PGresult]:
     return hasattr(info, "error_field")
 
 
-def _class_for_state(sqlstate: str) -> Type[Error]:
+def _class_for_state(sqlstate: str) -> type[Error]:
     try:
         return lookup(sqlstate)
     except KeyError:
         return get_base_exception(sqlstate)
 
 
-def get_base_exception(sqlstate: str) -> Type[Error]:
+def get_base_exception(sqlstate: str) -> type[Error]:
     return (
         _base_exc_map.get(sqlstate[:2])
         or _base_exc_map.get(sqlstate[:1])
@@ -1073,6 +1101,10 @@ class InFailedSqlTransaction(InternalError,
 
 class IdleInTransactionSessionTimeout(InternalError,
     code='25P03', name='IDLE_IN_TRANSACTION_SESSION_TIMEOUT'):
+    pass
+
+class TransactionTimeout(InternalError,
+    code='25P04', name='TRANSACTION_TIMEOUT'):
     pass
 
 

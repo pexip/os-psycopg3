@@ -3,37 +3,109 @@
 How to make a psycopg release
 =============================
 
-- Change version number in:
+- Check if there is a new version or libpq_ or OpenSSL_; in such case
+  update ``LIBPQ_VERSION`` and/or ``OPENSSL_VERSION`` in
+  ``.github/workflows/packages-bin.yml``.
 
-  - ``psycopg_c/psycopg_c/version.py``
-  - ``psycopg/psycopg/version.py``
-  - ``psycopg_pool/psycopg_pool/version.py``
+    .. _libpq: https://www.postgresql.org/ftp/source/
 
-- Change docs/news.rst to drop the "unreleased" mark from the version
+    .. _OpenSSL: https://www.openssl.org/source/
+
+- Check if there is a new `cibuildwheel release`__; if so, upgrade it in
+  ``.github/workflows/packages-bin.yml``.
+
+  .. __: https://github.com/pypa/cibuildwheel/releases
+
+- Use ``tools/bump_version.py`` to upgrade package version numbers.
 
 - Push to GitHub to run `the tests workflow`__.
 
   .. __: https://github.com/psycopg/psycopg/actions/workflows/tests.yml
 
-- Build the packages by triggering manually the `Build packages workflow`__.
+- Build the packages by triggering manually the ones requested among:
 
-  .. __: https://github.com/psycopg/psycopg/actions/workflows/packages.yml
+  - `Source packages`__
+  - `Binary packages`__
+  - `Pool packages`__
 
-- If all went fine, create a tag named after the version::
+  .. __: https://github.com/psycopg/psycopg/actions/workflows/packages-src.yml
+  .. __: https://github.com/psycopg/psycopg/actions/workflows/packages-bin.yml
+  .. __: https://github.com/psycopg/psycopg/actions/workflows/packages-pool.yml
 
-    git tag -a -s 3.0.dev1
+- Delete the ``wheelhouse`` directory there is one.
+
+- Build m1 packages by running ``./tools/build/run_build_macos_arm64.sh BRANCH``.
+  On successful completion it will save built packages in ``wheelhouse``
+
+- If all packages were built ok, push the new tag created by ``bump_version.py``::
+
     git push --tags
 
 - Download the ``artifacts.zip`` package from the last Packages workflow run.
 
-- Unpack the packages locally::
+- Unpack the packages in the wheelhouse dir::
 
-    mkdir tmp
-    cd tmp
+    mkdir -p wheelhouse
+    cd wheelhouse
     unzip ~/Downloads/artifact.zip
 
 - If the package is a testing one, upload it on TestPyPI with::
 
-    $ twine upload -s -r testpypi *
+    $ twine upload -r testpypi *
 
-- If the package is stable, omit ``-r testpypi``.
+- If the package is stable, omit ``-r testpypi``::
+
+    $ twine upload *
+
+- Run ``tools/bump_version.py -l dev`` to bump to the next dev version.
+
+
+When a new PostgreSQL major version is released
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+- Add the new version to ``tools/update_errors.py`` and run the script to add
+  new error classes.
+
+- If the script above found any change, document the version added at the
+  bottom of ``docs/api/errors.rst``.
+
+- Run the script ``tools/update_oids.py`` to add new oids. Use ``-h`` to get
+  an example docker command line to run a server locally.
+
+- Check if there are new enum values to include in:
+
+  - ``psycopg_c/psycopg_c/pq/libpq.pxd``;
+  - ``psycopg/psycopg/pq/_enums.py``.
+
+- Include the new version in GitHub Actions test and package grids.
+
+- Bump ``PG_VERSION`` in the ``macos`` job of
+
+  -  ``.github/workflows/packages-bin.yml``.
+  -  ``.github/workflows/tests.yml``.
+
+- Bump ``pg_version`` in ``tools/build/build_macos_arm64.sh``.
+
+- Bump the version in ``tools/build/wheel_win32_before_build.bat``.
+
+- Update the documented versions in:
+
+  - ``docs/basic/install.rst``;
+  - ``content/features/contents.lr`` in the psycopg-website repository.
+
+
+When a new Python major version is released
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+- Add the new version to the relevant test matrices in
+  ``.github/workflows/tests.yml`` and ``.github/workflows/packages-bin.yml``.
+
+- Update ``docs/basic/install.rst`` with the correct range of supported Python
+  versions.
+
+- Add the ``Programming Language :: Python :: 3.<X>`` classifier to
+  ``psycopg/setup.cfg``, ``psycopg_c/setup.cfg`` and ``psycopg_pool/setup.cfg``.
+
+- Update the list of versions in ``tools/build/build_macos_arm64.sh`` to include
+  the new version. Look for both the ``python_versions`` variable and the
+  ``CIBW_BUILD`` environment variable.
