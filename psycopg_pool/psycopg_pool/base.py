@@ -4,18 +4,22 @@ psycopg connection pool base class and functionalities.
 
 # Copyright (C) 2021 The Psycopg Team
 
+from __future__ import annotations
+
 from time import monotonic
 from random import random
-from typing import Any, Callable, Dict, Generic, Optional, Tuple
+from typing import TYPE_CHECKING, Any
 
 from psycopg import errors as e
-from psycopg.abc import ConnectionType
 
 from .errors import PoolClosed
 from ._compat import Counter, Deque
 
+if TYPE_CHECKING:
+    from psycopg._connection_base import BaseConnection
 
-class BasePool(Generic[ConnectionType]):
+
+class BasePool:
     # Used to generate pool names
     _num_pool = 0
 
@@ -36,21 +40,21 @@ class BasePool(Generic[ConnectionType]):
     _CONNECTIONS_ERRORS = "connections_errors"
     _CONNECTIONS_LOST = "connections_lost"
 
+    _pool: Deque[Any]
+
     def __init__(
         self,
         conninfo: str = "",
         *,
-        kwargs: Optional[Dict[str, Any]],
+        kwargs: dict[str, Any] | None,
         min_size: int,
-        max_size: Optional[int],
-        open: bool,
-        name: Optional[str],
+        max_size: int | None,
+        name: str | None,
         timeout: float,
         max_waiting: int,
         max_lifetime: float,
         max_idle: float,
         reconnect_timeout: float,
-        reconnect_failed: Optional[Callable[["BasePool[ConnectionType]"], None]],
         num_workers: int,
     ):
         min_size, max_size = self._check_size(min_size, max_size)
@@ -63,9 +67,7 @@ class BasePool(Generic[ConnectionType]):
             raise ValueError("num_workers must be at least 1")
 
         self.conninfo = conninfo
-        self.kwargs: Dict[str, Any] = kwargs or {}
-        self._reconnect_failed: Callable[["BasePool[ConnectionType]"], None]
-        self._reconnect_failed = reconnect_failed or (lambda pool: None)
+        self.kwargs: dict[str, Any] = kwargs or {}
         self.name = name
         self._min_size = min_size
         self._max_size = max_size
@@ -77,7 +79,7 @@ class BasePool(Generic[ConnectionType]):
         self.num_workers = num_workers
 
         self._nconns = min_size  # currently in the pool, out, being prepared
-        self._pool = Deque[ConnectionType]()
+        self._pool = Deque()
         self._stats = Counter[str]()
 
         # Min number of connections in the pool in a max_idle unit of time.
@@ -95,6 +97,7 @@ class BasePool(Generic[ConnectionType]):
 
         self._opened = False
         self._closed = True
+        self._open_implicit = False
 
     def __repr__(self) -> str:
         return (
@@ -115,7 +118,7 @@ class BasePool(Generic[ConnectionType]):
         """`!True` if the pool is closed."""
         return self._closed
 
-    def _check_size(self, min_size: int, max_size: Optional[int]) -> Tuple[int, int]:
+    def _check_size(self, min_size: int, max_size: int | None) -> tuple[int, int]:
         if max_size is None:
             max_size = min_size
 
@@ -141,7 +144,7 @@ class BasePool(Generic[ConnectionType]):
             else:
                 raise PoolClosed(f"the pool {self.name!r} is not open yet")
 
-    def _check_pool_putconn(self, conn: ConnectionType) -> None:
+    def _check_pool_putconn(self, conn: BaseConnection[Any]) -> None:
         pool = getattr(conn, "_pool", None)
         if pool is self:
             return
@@ -154,7 +157,7 @@ class BasePool(Generic[ConnectionType]):
             f"can't return connection to pool {self.name!r}, {msg}: {conn}"
         )
 
-    def get_stats(self) -> Dict[str, int]:
+    def get_stats(self) -> dict[str, int]:
         """
         Return current stats about the pool usage.
         """
@@ -162,7 +165,7 @@ class BasePool(Generic[ConnectionType]):
         rv.update(self._get_measures())
         return rv
 
-    def pop_stats(self) -> Dict[str, int]:
+    def pop_stats(self) -> dict[str, int]:
         """
         Return current stats about the pool usage.
 
@@ -173,7 +176,7 @@ class BasePool(Generic[ConnectionType]):
         rv.update(self._get_measures())
         return rv
 
-    def _get_measures(self) -> Dict[str, int]:
+    def _get_measures(self) -> dict[str, int]:
         """
         Return immediate measures of the pool (not counters).
         """
@@ -191,7 +194,7 @@ class BasePool(Generic[ConnectionType]):
         """
         return value * (1.0 + ((max_pc - min_pc) * random()) + min_pc)
 
-    def _set_connection_expiry_date(self, conn: ConnectionType) -> None:
+    def _set_connection_expiry_date(self, conn: BaseConnection[Any]) -> None:
         """Set an expiry date on a connection.
 
         Add some randomness to avoid mass reconnection.
@@ -199,22 +202,24 @@ class BasePool(Generic[ConnectionType]):
         conn._expire_at = monotonic() + self._jitter(self.max_lifetime, -0.05, 0.0)
 
 
-class ConnectionAttempt:
-    """Keep the state of a connection attempt."""
+class AttemptWithBackoff:
+    """
+    Keep the state of a repeated operation attempt with exponential backoff.
+    """
 
     INITIAL_DELAY = 1.0
     DELAY_JITTER = 0.1
     DELAY_BACKOFF = 2.0
 
-    def __init__(self, *, reconnect_timeout: float):
-        self.reconnect_timeout = reconnect_timeout
+    def __init__(self, *, timeout: float):
+        self.timeout = timeout
         self.delay = 0.0
         self.give_up_at = 0.0
 
     def update_delay(self, now: float) -> None:
         """Calculate how long to wait for a new connection attempt"""
         if self.delay == 0.0:
-            self.give_up_at = now + self.reconnect_timeout
+            self.give_up_at = now + self.timeout
             self.delay = BasePool._jitter(
                 self.INITIAL_DELAY, -self.DELAY_JITTER, self.DELAY_JITTER
             )
@@ -225,5 +230,5 @@ class ConnectionAttempt:
             self.delay = max(0.0, self.give_up_at - now)
 
     def time_to_give_up(self, now: float) -> bool:
-        """Return True if we are tired of trying to connect. Meh."""
+        """Return True if we are tired of trying this attempt. Meh."""
         return self.give_up_at > 0.0 and now >= self.give_up_at

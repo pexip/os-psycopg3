@@ -16,15 +16,13 @@ equivalent C implementations.
 from typing import Any
 
 cimport cython
+from libc.string cimport memchr, memcpy
+from cpython.bytearray cimport PyByteArray_AS_STRING, PyByteArray_FromStringAndSize
+from cpython.bytearray cimport PyByteArray_GET_SIZE, PyByteArray_Resize
 
-from libc.string cimport memcpy, memchr
-from cpython.bytearray cimport PyByteArray_FromStringAndSize, PyByteArray_Resize
-from cpython.bytearray cimport PyByteArray_GET_SIZE, PyByteArray_AS_STRING
-
-from psycopg_c.pq cimport _buffer_as_string_and_size, Escaping
+from psycopg_c.pq cimport Escaping, _buffer_as_string_and_size
 
 from psycopg import errors as e
-from psycopg.pq.misc import error_message
 
 
 @cython.freelist(8)
@@ -35,7 +33,7 @@ cdef class CDumper:
 
     oid = oids.INVALID_OID
 
-    def __cinit__(self, cls, context: Optional[AdaptContext] = None):
+    def __cinit__(self, cls, context: AdaptContext | None = None):
         self.cls = cls
         conn = context.connection if context is not None else None
         self._pgconn = conn.pgconn if conn is not None else None
@@ -58,14 +56,14 @@ cdef class CDumper:
         """
         raise NotImplementedError()
 
-    def dump(self, obj):
+    def dump(self, obj) -> Buffer | None:
         """Return the Postgres representation of *obj* as Python array of bytes"""
         cdef rv = PyByteArray_FromStringAndSize("", 0)
         cdef Py_ssize_t length = self.cdump(obj, rv, 0)
         PyByteArray_Resize(rv, length)
         return rv
 
-    def quote(self, obj):
+    def quote(self, obj) -> Buffer:
         cdef char *ptr
         cdef char *ptr_out
         cdef Py_ssize_t length
@@ -148,7 +146,7 @@ cdef class CLoader:
     cdef public libpq.Oid oid
     cdef pq.PGconn _pgconn
 
-    def __cinit__(self, int oid, context: Optional[AdaptContext] = None):
+    def __cinit__(self, libpq.Oid oid, context: AdaptContext | None = None):
         self.oid = oid
         conn = context.connection if context is not None else None
         self._pgconn = conn.pgconn if conn is not None else None
@@ -167,5 +165,5 @@ cdef class _CRecursiveLoader(CLoader):
 
     cdef Transformer _tx
 
-    def __cinit__(self, oid: int, context: Optional[AdaptContext] = None):
+    def __cinit__(self, oid: int, context: AdaptContext | None = None):
         self._tx = Transformer.from_context(context)

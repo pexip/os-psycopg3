@@ -5,15 +5,14 @@ from decimal import Decimal
 import pytest
 
 from psycopg import pq, sql
-from psycopg import errors as e
 from psycopg.adapt import PyFormat
-from psycopg.types.range import Range
 from psycopg.types import multirange
-from psycopg.types.multirange import Multirange, MultirangeInfo
-from psycopg.types.multirange import register_multirange
+from psycopg.types.range import Range
+from psycopg.types.multirange import Multirange, MultirangeInfo, register_multirange
 
 from ..utils import eur
 from .test_range import create_test_range
+from ..test_adapt import StrNoneBinaryDumper, StrNoneDumper
 
 pytestmark = [
     pytest.mark.pg(">= 14"),
@@ -195,22 +194,21 @@ def test_dump_builtin_empty_wrapper(conn, wrapper, fmt_in):
     assert rec[2] == dumper.oid
 
 
-@pytest.mark.parametrize("pgtype", mr_names)
-@pytest.mark.parametrize(
-    "fmt_in",
-    [
-        PyFormat.AUTO,
-        PyFormat.TEXT,
-        # There are many ways to work around this (use text, use a cast on the
-        # placeholder, use specific Range subclasses).
-        pytest.param(
-            PyFormat.BINARY,
-            marks=pytest.mark.xfail(
-                reason="can't dump array of untypes binary multirange without cast"
-            ),
+pyformat_array = [
+    PyFormat.AUTO,
+    PyFormat.TEXT,
+    # There are ways to work around this (use text, use specific Range subclasses).
+    pytest.param(
+        PyFormat.BINARY,
+        marks=pytest.mark.xfail(
+            reason="can't dump array of untyped binary multirange without cast"
         ),
-    ],
-)
+    ),
+]
+
+
+@pytest.mark.parametrize("pgtype", mr_names)
+@pytest.mark.parametrize("fmt_in", pyformat_array)
 def test_dump_builtin_array(conn, pgtype, fmt_in):
     mr1 = Multirange()  # type: ignore[var-annotated]
     mr2 = Multirange([Range(bounds="()")])  # type: ignore[var-annotated]
@@ -222,7 +220,7 @@ def test_dump_builtin_array(conn, pgtype, fmt_in):
 
 
 @pytest.mark.parametrize("pgtype", mr_names)
-@pytest.mark.parametrize("fmt_in", PyFormat)
+@pytest.mark.parametrize("fmt_in", pyformat_array)
 def test_dump_builtin_array_with_cast(conn, pgtype, fmt_in):
     mr1 = Multirange()  # type: ignore[var-annotated]
     mr2 = Multirange([Range(bounds="()")])  # type: ignore[var-annotated]
@@ -240,8 +238,8 @@ def test_dump_builtin_array_with_cast(conn, pgtype, fmt_in):
 @pytest.mark.parametrize("fmt_in", PyFormat)
 def test_dump_builtin_array_wrapper(conn, wrapper, fmt_in):
     wrapper = getattr(multirange, wrapper)
-    mr1 = Multirange()  # type: ignore[var-annotated]
-    mr2 = Multirange([Range(bounds="()")])  # type: ignore[var-annotated]
+    mr1 = wrapper()
+    mr2 = wrapper([Range(bounds="()")])
     cur = conn.execute(
         f"""select '{{"{{}}","{{(,)}}"}}' = %{fmt_in.value}""", ([mr1, mr2],)
     )
@@ -314,14 +312,8 @@ def test_copy_in(conn, min, max, bounds, format):
         r = Range(empty=True)
 
     mr = Multirange([r])
-    try:
-        with cur.copy(f"copy copymr (mr) from stdin (format {format.name})") as copy:
-            copy.write_row([mr])
-    except e.InternalError_:
-        if not min and not max and format == pq.Format.BINARY:
-            pytest.xfail("TODO: add annotation to dump multirange with no type info")
-        else:
-            raise
+    with cur.copy(f"copy copymr (mr) from stdin (format {format.name})") as copy:
+        copy.write_row([mr])
 
     rec = cur.execute("select mr from copymr order by id").fetchone()
     if not r.isempty:
@@ -405,6 +397,18 @@ def test_dump_custom_empty(conn, testmr):
     register_multirange(info, conn)
 
     r = Multirange()  # type: ignore[var-annotated]
+    cur = conn.execute("select '{}'::testmultirange = %s", (r,))
+    assert cur.fetchone()[0] is True
+
+
+@pytest.mark.parametrize("fmt_in", PyFormat)
+def test_dump_custom_none(conn, testmr, fmt_in):
+    info = MultirangeInfo.fetch(conn, "testmultirange")
+    register_multirange(info, conn)
+    conn.adapters.register_dumper(str, StrNoneDumper)
+    conn.adapters.register_dumper(str, StrNoneBinaryDumper)
+
+    r = Multirange[str]()
     cur = conn.execute("select '{}'::testmultirange = %s", (r,))
     assert cur.fetchone()[0] is True
 

@@ -10,6 +10,220 @@
 Current release
 ---------------
 
+Python 3.2.6
+^^^^^^^^^^^^
+
+- Fix connection semantic when using ``target_session_attrs=prefer-standby``
+  (:ticket:`#1021`).
+
+
+Psycopg 3.2.5
+^^^^^^^^^^^^^
+
+- 3x faster UUID loading thanks to C implementation (:tickets:`#447, #998`).
+
+
+Psycopg 3.2.4
+^^^^^^^^^^^^^
+
+- Don't lose notifies received whilst the `~Connection.notifies()` iterator
+  is not running (:ticket:`#962`).
+- Make sure that the notifies callback is called during the use of the
+  `~Connection.notifies()` generator (:ticket:`#972`).
+- Raise the correct error returned by the database (such as `!AdminShutdown`
+  or `!IdleInTransactionSessionTimeout`) instead of a generic
+  `OperationalError` when a server error causes a client disconnection
+  (:ticket:`#988`).
+- Build macOS dependencies from sources instead using the Homebrew versions
+  in order to avoid problems with ``MACOSX_DEPLOYMENT_TARGET`` (:ticket:`#858`).
+- Bump libpq to 17.2 in Linux and macOS binary packages.
+- Bump libpq to 16.4 in Windows binary packages, using the `vcpkg library`__
+  (:ticket:`#966`).
+
+.. __: https://vcpkg.io/en/package/libpq
+
+
+Psycopg 3.2.3
+^^^^^^^^^^^^^
+
+- Release binary packages including PostgreSQL 17 libpq (:ticket:`#852`).
+
+
+Psycopg 3.2.2
+^^^^^^^^^^^^^
+
+- Drop `!TypeDef` specifications as string from public modules, as they cannot
+  be composed by users as `!typing` objects previously could (:ticket:`#860`).
+- Release Python 3.13 binary packages.
+
+
+Psycopg 3.2.1
+^^^^^^^^^^^^^
+
+- Fix packaging metadata breaking ``[c]``, ``[binary]`` dependencies
+  (:ticket:`#853`).
+
+
+Psycopg 3.2
+-----------
+
+.. rubric:: New top-level features
+
+- Add support for integer, floating point, boolean `NumPy scalar types`__
+  (:ticket:`#332`).
+- Add `!timeout` and `!stop_after` parameters to `Connection.notifies()`
+  (:ticket:`340`).
+- Allow dumpers to return `!None`, to be converted to NULL (:ticket:`#377`).
+- Add :ref:`raw-query-cursors` to execute queries using placeholders in
+  PostgreSQL format (`$1`, `$2`...) (:tickets:`#560, #839`).
+- Add `capabilities` object to :ref:`inspect the libpq capabilities
+  <capabilities>` (:ticket:`#772`).
+- Add `~rows.scalar_row` to return scalar values from a query (:ticket:`#723`).
+- Add `~Connection.cancel_safe()` for encrypted and non-blocking cancellation
+  when using libpq v17. Use such method internally to implement
+  `!KeyboardInterrupt` and `~cursor.copy` termination (:ticket:`#754`).
+- The `!context` parameter of `sql` objects `~sql.Composable.as_string()` and
+  `~sql.Composable.as_bytes()` methods is now optional (:ticket:`#716`).
+- Add `~Connection.set_autocommit()` on sync connections, and similar
+  transaction control methods available on the async connections.
+- Add a `size` parameter to `~Cursor.stream()` to enable results retrieval in
+  chunks instead of row-by-row (:ticket:`#794`).
+
+.. rubric:: New libpq wrapper features
+
+- Add support for libpq functions to close prepared statements and portals
+  introduced in libpq v17 (:ticket:`#603`).
+- Add support for libpq encrypted and non-blocking query cancellation
+  functions introduced in libpq v17 (:ticket:`#754`).
+- Add support for libpq function to retrieve results in chunks introduced in
+  libpq v17 (:ticket:`#793`).
+- Add support for libpq function to change role passwords introduced in
+  libpq v17 (:ticket:`#818`).
+
+.. rubric:: Other changes
+
+- Drop support for Python 3.7.
+- Prepared statements are now :ref:`compatible with PgBouncer <pgbouncer>`.
+  (:ticket:`#589`).
+- Disable receiving more than one result on the same cursor in pipeline mode,
+  to iterate through `~Cursor.nextset()`. The behaviour was different than
+  in non-pipeline mode and not totally reliable (:ticket:`#604`).
+  The `Cursor` now only preserves the results set of the last
+  `~Cursor.execute()`, consistently with non-pipeline mode.
+
+.. __: https://numpy.org/doc/stable/reference/arrays.scalars.html#built-in-scalar-types
+
+
+Psycopg 3.1.20
+^^^^^^^^^^^^^^
+
+- Use the simple query protocol to execute COMMIT/ROLLBACK when possible.
+  This should make querying the PgBouncer admin database easier
+  (:ticket:`#820`).
+- Avoid unneeded escaping checks and memory over-allocation in text copy
+  (:ticket:`#829`).
+- Bundle binary package with OpenSSL 3.3.x (:ticket:`#847`).
+- Drop macOS ARM64 binary packages for macOS versions before 14.0 and Python
+  before 3.10 (not for our choice but for the lack of available CI runners;
+  :ticket:`#858`)
+
+
+Psycopg 3.1.19
+^^^^^^^^^^^^^^
+
+- Fix unaligned access undefined behaviour in C extension (:ticket:`#734`).
+- Fix excessive stripping of error message prefixes (:ticket:`#752`).
+- Allow to specify the ``connect_timeout`` connection parameter as float
+  (:ticket:`#796`).
+- Improve COPY performance on macOS (:ticket:`#745`).
+
+
+Psycopg 3.1.18
+^^^^^^^^^^^^^^
+
+- Fix possible deadlock on pipeline exit (:ticket:`#685`).
+- Fix overflow loading large intervals in C module (:ticket:`#719`).
+- Fix compatibility with musl libc distributions affected by `CPython issue
+  #65821`__ (:ticket:`#725`).
+
+.. __: https://github.com/python/cpython/issues/65821
+
+
+Psycopg 3.1.17
+^^^^^^^^^^^^^^
+
+- Fix multiple connection attempts when a host name resolve to multiple
+  IP addresses (:ticket:`#699`).
+- Use `typing.Self` as a more correct return value annotation of context
+  managers and other self-returning methods (see :ticket:`#708`).
+
+
+Psycopg 3.1.16
+^^^^^^^^^^^^^^
+
+- Fix empty ports handling in async multiple connection attempts
+  (:ticket:`#703`).
+
+
+Psycopg 3.1.15
+^^^^^^^^^^^^^^
+
+- Fix use of ``service`` in connection string (regression in 3.1.13,
+  :ticket:`#694`).
+- Fix async connection to hosts resolving to multiple IP addresses (regression
+  in 3.1.13, :ticket:`#695`).
+- Respect the :envvar:`PGCONNECT_TIMEOUT` environment variable to determine
+  the connection timeout.
+
+
+Psycopg 3.1.14
+^^^^^^^^^^^^^^
+
+- Fix :ref:`interaction with gevent <gevent>` (:ticket:`#527`).
+- Add support for PyPy (:ticket:`#686`).
+
+.. _gevent: https://www.gevent.org/
+
+
+Psycopg 3.1.13
+^^^^^^^^^^^^^^
+
+- Raise `DataError` instead of whatever internal failure trying to dump a
+  `~datetime.time` object with with a `!tzinfo` specified as
+  `~zoneinfo.ZoneInfo` (ambiguous offset, see :ticket:`#652`).
+- Handle gracefully EINTR on signals instead of raising `InterruptedError`,
+  consistently with :pep:`475` guideline (:ticket:`#667`).
+- Fix support for connection strings with multiple hosts/ports and for the
+  ``load_balance_hosts`` connection parameter (:ticket:`#674`).
+- Fix memory leak receiving notifications in Python implementation
+  (:ticket:`#679`).
+
+
+Psycopg 3.1.12
+^^^^^^^^^^^^^^
+
+- Fix possible hanging if a connection is closed while querying (:ticket:`#608`).
+- Fix memory leak when `~register_*()` functions are called repeatedly
+  (:ticket:`#647`).
+- Release Python 3.12 binary packages.
+
+
+Psycopg 3.1.11
+^^^^^^^^^^^^^^
+
+- Avoid caching the parsing results of large queries to avoid excessive memory
+  usage (:ticket:`#628`).
+- Fix integer overflow in C/binary extension with OID > 2^31 (:ticket:`#630`).
+- Fix loading of intervals with days and months or years (:ticket:`#643`).
+- Work around excessive CPU usage on Windows (reported in :ticket:`#645`).
+- Fix building on Solaris and derivatives (:ticket:`#632`).
+- Fix possible lack of critical section guard in async
+  `~AsyncCursor.executemany()`.
+- Fix missing pipeline fetch in async `~AsyncCursor.scroll()`.
+- Build binary packages with libpq 15.4, which allows group-readable
+  permissions on the SSL certificate on the client (:ticket:`#528`).
+
+
 Psycopg 3.1.10
 ^^^^^^^^^^^^^^
 
@@ -55,6 +269,7 @@ Psycopg 3.1.8
 - Set `Cursor.rowcount` to the number of rows of each result set from
   `~Cursor.executemany()` when called with `!returning=True` (:ticket:`#479`).
 - Fix `TypeInfo.fetch()` when used with `ClientCursor` (:ticket:`#484`).
+
 
 Psycopg 3.1.7
 ^^^^^^^^^^^^^
@@ -276,7 +491,7 @@ Psycopg 3.0.4
 
 - Allow to use the module with strict strings comparison (:ticket:`#147`).
 - Fix segfault on Python 3.6 running in ``-W error`` mode, related to
-  `!backport.zoneinfo` `ticket #109
+  `!backport.zoneinfo` (:ticket:`#109`).
   <https://github.com/pganssle/zoneinfo/issues/109>`__.
 - Build binary package with libpq versions not affected by `CVE-2021-23222
   <https://www.postgresql.org/support/security/CVE-2021-23222/>`__

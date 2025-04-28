@@ -3,9 +3,8 @@ import pytest
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
 
-pytestmark = [pytest.mark.dns]
 
-
+@pytest.mark.dns
 @pytest.mark.anyio
 async def test_resolve_hostaddr_async_warning(recwarn):
     import_dnspython()
@@ -14,7 +13,6 @@ async def test_resolve_hostaddr_async_warning(recwarn):
     params = await psycopg._dns.resolve_hostaddr_async(  # type: ignore[attr-defined]
         params
     )
-    assert conninfo_to_dict(conninfo) == params
     assert "resolve_hostaddr_async" in str(recwarn.pop(DeprecationWarning).message)
 
 

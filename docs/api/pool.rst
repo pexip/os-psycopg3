@@ -52,6 +52,16 @@ The `!ConnectionPool` class
                     `~psycopg.Connection.connect()` for details.
    :type conninfo: `!str`
 
+   :param connection_class: The class of the connections to serve. It should
+                            be a `!Connection` subclass.
+   :type connection_class: `!type`, default: `~psycopg.Connection`
+
+   :param kwargs: Extra arguments to pass to `!connect()`. Note that this is
+                  *one dict argument* of the pool constructor, which is
+                  expanded as `connect()` keyword parameters.
+
+   :type kwargs: `!dict`
+
    :param min_size: The minimum number of connection the pool will hold. The
                    pool will actively try to create new connections if some
                    are lost (closed, broken) and will try to never go below
@@ -66,16 +76,6 @@ The `!ConnectionPool` class
                    been unused for more than `!max_idle` seconds.
    :type max_size: `!int`, default: `!None`
 
-   :param kwargs: Extra arguments to pass to `!connect()`. Note that this is
-                  *one dict argument* of the pool constructor, which is
-                  expanded as `connect()` keyword parameters.
-
-   :type kwargs: `!dict`
-
-   :param connection_class: The class of the connections to serve. It should
-                            be a `!Connection` subclass.
-   :type connection_class: `!type`, default: `~psycopg.Connection`
-
    :param open: If `!True`, open the pool, creating the required connections,
                 on init. If `!False`, open the pool when `!open()` is called or
                 when the pool context is entered. See the `open()` method
@@ -88,6 +88,15 @@ The `!ConnectionPool` class
                      database) make sure to close an eventual transaction
                      before leaving the function.
    :type configure: `Callable[[Connection], None]`
+
+   :param check: A callback to check that a connection is working correctly
+                 when obtained by the pool. The callback is called at every
+                 `getconn()` or `connection()`: the connection is only passed
+                 to the client if the callback doesn't throw an exception.
+                 By default no check is made on the connection. You can
+                 provide the `check_connection()` pool static method if you
+                 want to perform a simple check.
+   :type check: `Callable[[Connection], None]`
 
    :param reset: A callback to reset a function after it has been returned to
                  the pool. The connection is guaranteed to be passed to the
@@ -151,13 +160,27 @@ The `!ConnectionPool` class
    :type num_workers: `!int`, default: 3
 
    .. versionchanged:: 3.1
+        added `!open` parameter to the constructor.
 
-        added `!open` parameter to init method.
+   .. versionchanged:: 3.2
+        added `!check` parameter to the constructor.
 
-   .. note:: In a future version, the default value for the `!open` parameter
-        might be changed to `!False`. If you rely on this behaviour (e.g. if
-        you don't use the pool as a context manager) you might want to specify
-        this parameter explicitly.
+   .. versionchanged:: 3.2
+        The class is generic and `!connection_class` provides types type
+        variable. See :ref:`pool-generic`.
+
+   .. warning::
+
+        At the moment, the default value for the `!open` parameter is `!True`;
+        In a future version, the default will be changed to `!False`.
+
+        If you expect the pool to be open on creation even if you don't use
+        the pool as context manager, you should specify the parameter
+        `!open=True` explicitly.
+
+        Starting from psycopg_pool 3.2, a warning is raised if the pool is
+        used with the expectation of being implicitly opened in the
+        constructor and `!open` is not specified.
 
    .. automethod:: connection
 
@@ -167,6 +190,10 @@ The `!ConnectionPool` class
               conn.execute(...)
 
           # the connection is now back in the pool
+
+      .. versionchanged:: 3.2
+        The connection returned is annotated as defined in `!connection_class`.
+        See :ref:`pool-generic`.
 
    .. automethod:: open
 
@@ -201,6 +228,10 @@ The `!ConnectionPool` class
 
    .. automethod:: resize
    .. automethod:: check
+   .. automethod:: check_connection
+
+      .. versionadded:: 3.2
+
    .. automethod:: get_stats
    .. automethod:: pop_stats
 
@@ -236,8 +267,8 @@ class but its blocking methods are implemented as `!async` coroutines. It
 returns instances of `~psycopg.AsyncConnection`, or of its subclass if
 specified so in the `!connection_class` parameter.
 
-Only the functions with different signature from `!ConnectionPool` are
-listed here.
+Only the functions and parameters with different signature from
+`!ConnectionPool` are listed here.
 
 .. autoclass:: AsyncConnectionPool
 
@@ -245,12 +276,49 @@ listed here.
                             be an `!AsyncConnection` subclass.
    :type connection_class: `!type`, default: `~psycopg.AsyncConnection`
 
+   :param check: A callback to check that a connection is working correctly
+                 when obtained by the pool.
+   :type check: `async Callable[[Connection], None]`
+
    :param configure: A callback to configure a connection after creation.
    :type configure: `async Callable[[AsyncConnection], None]`
 
    :param reset: A callback to reset a function after it has been returned to
                  the pool.
    :type reset: `async Callable[[AsyncConnection], None]`
+
+   :param reconnect_failed: Callback invoked if an attempt to create a new
+        connection fails for more than `!reconnect_timeout` seconds.
+   :type reconnect_failed: `Callable[[AsyncConnectionPool], None]` or
+        `async Callable[[AsyncConnectionPool], None]`
+
+   .. versionchanged:: 3.2
+        added `!check` parameter to the constructor.
+
+   .. versionchanged:: 3.2
+        The `!reconnect_failed` parameter can be `!async`.
+
+   .. warning::
+
+        Opening an async pool in the constructor (using `!open=True` on init)
+        will become an error in a future pool versions. Please note that,
+        currently, `!open=True` is the default; in a future version, the
+        default for the parameter will be changed to `!False`.
+
+        In order to make sure that your code will keep working as expected in
+        future versions, please specify `!open=False` in the constructor and
+        use an explicit `!await pool.open()`::
+
+            pool = AsyncConnectionPool(..., open=False)
+            await pool.open()
+
+        or use the pool context manager::
+
+            async with AsyncConnectionPool(..., open=False) as pool:
+                ...
+
+        Starting from psycopg_pool 3.2, opening an async pool in the
+        constructor raises a warning.
 
    .. automethod:: connection
 
@@ -280,6 +348,10 @@ listed here.
    .. automethod:: wait
    .. automethod:: resize
    .. automethod:: check
+   .. automethod:: check_connection
+
+      .. versionadded:: 3.2
+
    .. automethod:: getconn
    .. automethod:: putconn
 

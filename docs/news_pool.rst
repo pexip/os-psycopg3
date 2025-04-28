@@ -7,18 +7,71 @@
 ``psycopg_pool`` release notes
 ==============================
 
-Future releases
+Current release
 ---------------
 
-psycopg_pool 3.1.8 (unreleased)
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+psycopg_pool 3.2.4
+^^^^^^^^^^^^^^^^^^
+
+- Add a hint to the warning printed if threads fail to stop during
+  ``__del__``, which has been reported happening during interpreter shutdown
+  on Python 3.13 (see :ticket:`#954`).
+
+
+psycopg_pool 3.2.3
+^^^^^^^^^^^^^^^^^^
+
+- Add metadata to declare compatibility with Python 3.13.
+
+
+psycopg_pool 3.2.2
+^^^^^^^^^^^^^^^^^^
+
+- Raise a `RuntimeWarning` instead of a `DeprecationWarning` if an async pool
+  is open in the constructor.
+- Fix connections possibly left in the pool after closing (:ticket:`#784`).
+- Use an empty query instead of ``SELECT 1`` to check connections
+  (:ticket:`#790`).
+
+
+psycopg_pool 3.2.1
+^^^^^^^^^^^^^^^^^^
+
+- Respect the `!timeout` parameter on `~ConnectionPool.connection()` when
+  `!check` fails. Also avoid a busy-loop of checking; separate check attempts
+  using an exponential backoff (:ticket:`#709`).
+- Use `typing.Self` as a more correct return value annotation of context
+  managers and other self-returning methods (see :ticket:`708`).
+
+
+psycopg_pool 3.2.0
+------------------
+
+- Add support for async `!reconnect_failed` callbacks in `AsyncConnectionPool`
+  (:ticket:`#520`).
+- Add `!check` parameter to the pool constructor and
+  `~ConnectionPool.check_connection()` method. (:ticket:`#656`).
+- Make connection pool classes generic on the connection type (:ticket:`#559`).
+- Raise a warning if sync pools rely an implicit `!open=True` and the
+  pool context is not used. In the future the default will become `!False`
+  (:ticket:`#659`).
+- Raise a warning if async pools are opened in the constructor. In the future
+  it will become an error. (:ticket:`#659`).
+
+
+psycopg_pool 3.1.9
+^^^^^^^^^^^^^^^^^^
+
+- Fix the return type annotation of `!NullConnectionPool.__enter__()`
+  (:ticket:`#540`).
+
+
+psycopg_pool 3.1.8
+^^^^^^^^^^^^^^^^^^
 
 - Enforce connections' ``max_lifetime`` on `~ConnectionPool.check()`
   (:ticket:`#482`).
 
-
-Current release
----------------
 
 psycopg_pool 3.1.7
 ^^^^^^^^^^^^^^^^^^
@@ -73,7 +126,7 @@ psycopg_pool 3.1.0
 ------------------
 
 - Add :ref:`null-pool` (:ticket:`#148`).
-- Add `ConnectionPool.open()` and ``open`` parameter to the pool init
+- Add `ConnectionPool.open()` and `!open` parameter to the pool constructor
   (:ticket:`#151`).
 - Drop support for Python 3.6.
 

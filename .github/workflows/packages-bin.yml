@@ -1,9 +1,36 @@
 name: Build binary packages
 
+# Note: Libpq is currently built from source on most platforms and the build
+# artifacts are cached across pipeline runs.
+#
+# You can see the caches at https://github.com/psycopg/psycopg/actions/caches
+#
+# You can delete a cache using:
+#
+#   curl -L -X DELETE
+#     -H "Accept: application/vnd.github+json"
+#     -H "Authorization: Bearer $GITHUB_TOKEN"
+#     -H "X-GitHub-Api-Version: 2022-11-28"
+#     "https://api.github.com/repos/psycopg/psycopg/actions/caches?key=libpq-manylinux-ppc64le-17.2-3.4.0"
+#
+# ref: https://docs.github.com/en/rest/actions/cache?apiVersion=2022-11-28#delete-github-actions-caches-for-a-repository-using-a-cache-key
+
 on:
   workflow_dispatch:
   schedule:
     - cron: '28 7 * * sun'
+
+env:
+  # Latest release: https://www.postgresql.org/ftp/source/
+  LIBPQ_VERSION: "17.4"
+  # Note: On windows the latest version can be found at
+  # https://vcpkg.io/en/package/libpq
+  # However the command line tool doesn't have a flag to specify to install
+  # a specific version, so whatever you get you keep it.
+  # https://github.com/microsoft/vcpkg/discussions/25622
+
+  # Latest release: https://www.openssl.org/source/
+  OPENSSL_VERSION: "3.4.1"
 
 jobs:
 
@@ -11,39 +38,34 @@ jobs:
     runs-on: ubuntu-latest
     if: true
 
-    env:
-      LIBPQ_VERSION: "15.3"
-      OPENSSL_VERSION: "1.1.1v"
-
     strategy:
       fail-fast: false
       matrix:
         arch: [x86_64, i686, ppc64le, aarch64]
-        pyver: [cp37, cp38, cp39, cp310, cp311]
+        pyver: [cp38, cp39, cp310, cp311, cp312, cp313]
         platform: [manylinux, musllinux]
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Set up QEMU for multi-arch build
         # Check https://github.com/docker/setup-qemu-action for newer versions.
-        uses: docker/setup-qemu-action@v2
+        uses: docker/setup-qemu-action@v3
         with:
-          # Note: 6.2.0 is buggy: make sure to avoid it.
-          # See https://github.com/pypa/cibuildwheel/issues/1250
-          image: tonistiigi/binfmt:qemu-v7.0.0
+          # https://github.com/pypa/cibuildwheel/discussions/2256
+          image: tonistiigi/binfmt:qemu-v8.1.5
 
       - name: Cache libpq build
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: /tmp/libpq.build
-          key: libpq-${{ env.LIBPQ_VERSION }}-${{ matrix.platform }}-${{ matrix.arch }}-2
+          key: libpq-${{ matrix.platform }}-${{ matrix.arch }}-${{ env.LIBPQ_VERSION }}-${{ env.OPENSSL_VERSION }}
 
       - name: Create the binary package source tree
         run: python3 ./tools/build/copy_to_binary.py
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.14.1
+        uses: pypa/cibuildwheel@v2.22.0
         with:
           package-dir: psycopg_binary
         env:
@@ -67,12 +89,13 @@ jobs:
             PGPASSWORD=password
             LIBPQ_BUILD_PREFIX=/host/tmp/libpq.build
             PATH="$LIBPQ_BUILD_PREFIX/bin:$PATH"
-            LD_LIBRARY_PATH="$LIBPQ_BUILD_PREFIX/lib"
+            LD_LIBRARY_PATH="$LIBPQ_BUILD_PREFIX/lib:$LIBPQ_BUILD_PREFIX/lib64"
             PSYCOPG_TEST_WANT_LIBPQ_BUILD=${{ env.LIBPQ_VERSION }}
             PSYCOPG_TEST_WANT_LIBPQ_IMPORT=${{ env.LIBPQ_VERSION }}
 
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
+          name: linux-${{matrix.pyver}}-${{matrix.platform}}_${{matrix.arch}}
           path: ./wheelhouse/*.whl
 
     services:
@@ -99,35 +122,52 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # These archs require an Apple M1 runner: [arm64, universal2]
-        arch: [x86_64]
-        pyver: [cp37, cp38, cp39, cp310, cp311]
+        arch: [x86_64, arm64]
+        pyver: [cp39, cp310, cp311, cp312, cp313]
+        include:
+          # cp38 on arm64 can be built but cannot be tested:
+          # https://github.com/pypa/cibuildwheel/pull/1169
+          - arch: x86_64
+            pyver: cp38
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout repos
+        uses: actions/checkout@v4
+
+      - name: Cache libpq build
+        uses: actions/cache@v4
+        with:
+          path: /tmp/libpq.build
+          key: libpq-${{ env.LIBPQ_VERSION }}-macos-${{ matrix.arch }}-${{ env.OPENSSL_VERSION }}
 
       - name: Create the binary package source tree
         run: python3 ./tools/build/copy_to_binary.py
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.12.0
+        uses: pypa/cibuildwheel@v2.22.0
         with:
           package-dir: psycopg_binary
         env:
           CIBW_BUILD: ${{matrix.pyver}}-macosx_${{matrix.arch}}
-          CIBW_ARCHS_MACOS: x86_64
+          CIBW_ARCHS_MACOS: ${{matrix.arch}}
+          MACOSX_ARCHITECTURE: ${{matrix.arch}}
           CIBW_BEFORE_ALL_MACOS: ./tools/build/wheel_macos_before_all.sh
           CIBW_TEST_REQUIRES: ./psycopg[test] ./psycopg_pool
           CIBW_TEST_COMMAND: >-
             pytest {project}/tests -m 'not slow and not flakey' --color yes
           CIBW_ENVIRONMENT: >-
+            PG_VERSION=17
             PSYCOPG_IMPL=binary
             PSYCOPG_TEST_DSN='dbname=postgres'
-            PSYCOPG_TEST_WANT_LIBPQ_BUILD=">= 14"
-            PSYCOPG_TEST_WANT_LIBPQ_IMPORT=">= 14"
+            LIBPQ_BUILD_PREFIX=/tmp/libpq.build
+            PATH="$LIBPQ_BUILD_PREFIX/bin:$PATH"
+            PSYCOPG_TEST_WANT_LIBPQ_BUILD=">= ${{env.LIBPQ_VERSION}}"
+            PSYCOPG_TEST_WANT_LIBPQ_IMPORT=">= ${{env.LIBPQ_VERSION}}"
 
-      - uses: actions/upload-artifact@v3
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
         with:
+          name: macos-${{matrix.pyver}}-${{matrix.arch}}
           path: ./wheelhouse/*.whl
 
 
@@ -142,25 +182,44 @@ jobs:
       matrix:
         # Might want to add win32, untested at the moment.
         arch: [win_amd64]
-        pyver: [cp37, cp38, cp39, cp310, cp311]
+        pyver: [cp38, cp39, cp310, cp311, cp312, cp313]
+
+    defaults:
+      run:
+        shell: bash
 
     steps:
-      - uses: actions/checkout@v3
+      # there are some other libpq in PATH
+      - run: rm -rf c:/tools/php C:/Strawberry/c/bin
+
+      - uses: actions/checkout@v4
 
       - name: Start PostgreSQL service for test
         run: |
           $PgSvc = Get-Service "postgresql*"
           Set-Service $PgSvc.Name -StartupType manual
           $PgSvc.Start()
+        shell: powershell
+
+      - name: Export GitHub Actions cache environment variables
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const path = require('path')
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+            core.addPath(path.join(process.env.VCPKG_INSTALLATION_ROOT, 'installed/x64-windows-release/lib'));
+            core.addPath(path.join(process.env.VCPKG_INSTALLATION_ROOT, 'installed/x64-windows-release/bin'));
 
       - name: Create the binary package source tree
         run: python3 ./tools/build/copy_to_binary.py
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.12.0
+        uses: pypa/cibuildwheel@v2.22.0
         with:
           package-dir: psycopg_binary
         env:
+          VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite" # cache vcpkg
           CIBW_BUILD: ${{matrix.pyver}}-${{matrix.arch}}
           CIBW_ARCHS_WINDOWS: AMD64 x86
           CIBW_BEFORE_BUILD_WINDOWS: '.\tools\build\wheel_win32_before_build.bat'
@@ -172,14 +231,29 @@ jobs:
             pytest {project}/tests -m "not slow and not flakey" --color yes
           CIBW_ENVIRONMENT_WINDOWS: >-
             PSYCOPG_IMPL=binary
-            PATH="C:\\Program Files\\PostgreSQL\\14\\bin;$PATH"
             PSYCOPG_TEST_DSN="host=127.0.0.1 user=postgres"
-            PSYCOPG_TEST_WANT_LIBPQ_BUILD=">= 14"
-            PSYCOPG_TEST_WANT_LIBPQ_IMPORT=">= 14"
+            PSYCOPG_TEST_WANT_LIBPQ_BUILD=">= 16"
+            PSYCOPG_TEST_WANT_LIBPQ_IMPORT=">= 16"
 
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
+          name: windows-${{matrix.pyver}}-${{matrix.arch}}
           path: ./wheelhouse/*.whl
 
+
+  # }}}
+
+  merge:  # {{{
+    runs-on: ubuntu-latest
+    needs:
+      - linux
+      - macos
+      - windows
+    steps:
+      - name: Merge Artifacts
+        uses: actions/upload-artifact/merge@v4
+        with:
+          name: psycopg-binary-artifact
+          delete-merged: true
 
   # }}}

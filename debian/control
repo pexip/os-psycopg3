@@ -5,27 +5,32 @@ Build-Depends:
  debhelper-compat (= 13),
  dh-sequence-python3,
  dh-sequence-sphinxdoc,
- dh-python,
  libpq-dev,
  postgresql,
  cmake,
- python3-all:any,
+ python3-all-dev,
  python3-setuptools,
  pybuild-plugin-pyproject,
+# python3-typing-extensions,
+ python3-anyio <!nocheck>,
  python3-pytest <!nocheck>,
  python3-dnspython <!nocheck>,
+ python3-numpy <!nocheck>,
  python3-shapely <!nocheck>,
  python3-tenacity <!nocheck>
 Build-Depends-Indep:
  python3-doc <!nodoc>,
  python-psycopg2-doc <!nodoc>,
+ python-numpy-doc <!nodoc>,
  python3-sphinx <!nodoc>,
  python3-sphinx-autodoc-typehints <!nodoc>,
  furo <!nodoc>,
+Build-Depends-Arch:
+ cython3,
 Maintainer: Pexip AS <packaging@pexip.com>
 XSBC-Pexip-Original-Maintainer: Tomasz Rybak <serpent@debian.org>
 XSBC-Pexip-Original-Uploaders: Debian Python Team <team+python@tracker.debian.org>
-Standards-Version: 4.6.2
+Standards-Version: 4.7.0
 Rules-Requires-Root: no
 Vcs-Git: https://salsa.debian.org/python-team/packages/psycopg3.git
 Vcs-Browser: https://salsa.debian.org/python-team/packages/psycopg3
@@ -39,6 +44,8 @@ Depends:
  ${python3:Depends},
  ${shlibs:Depends},
  libpq5
+Recommends:
+ python3-psycopg-c
 Suggests:
  python3-psycopg-pool,
  python-psycopg-doc
@@ -71,13 +78,53 @@ Description: PostgreSQL database adapter for Python 3
   - a great integration of the COPY support
   - direct access to the libpq functionalities
 
+Package: python3-psycopg-c
+Architecture: any
+Depends:
+ ${misc:Depends},
+ ${python3:Depends},
+ ${shlibs:Depends},
+ libpq5,
+ python3-psycopg (= ${source:Version})
+Suggests:
+ python3-psycopg-pool,
+ python-psycopg-doc
+Description: PostgreSQL database adapter for Python 3 - binary module
+ Psycopg 3 is a newly designed PostgreSQL database adapter for the Python
+ programming language.
+ .
+ Psycopg 3 is a complete rewrite of Psycopg 2, maintaining the same
+ fundamental libpq wrapper architecture and DB-API interface design, but
+ exposing new features to better work with the newer versions of Python
+ and PostgreSQL.
+ .
+ On the Python side, Psycopg 3 allows the use of asyncio-based
+ concurrency and static typing. Many improvement to the Python interface
+ make the library much simpler and more idiomatic to use,
+ .
+ On the PostgreSQL side, Psycopg 3 makes use of server-side parameters,
+ prepared statements, binary parameters, and great support for COPY
+ operations.
+ .
+ Psycopg 3 presents a familiar interface for everyone who has used
+ Psycopg 2 or any other `DB-API 2.0` database adapter, but allows one
+ to use more modern PostgreSQL and Python features, such as:
+  - Strict Strong Typing
+  - asynchronous support
+  - server-side parameters binding
+  - binary communication
+  - a great integration of the COPY support
+  - direct access to the libpq functionalities
+ .
+ This package contains binary module, increasing performance of operations
+
 Package: python3-psycopg-pool
 Architecture: all
 Depends:
  ${misc:Depends},
  ${python3:Depends},
  ${shlibs:Depends},
- python3-psycopg (= ${binary:Version})
+ python3-psycopg
 Conflicts: python3-psycopg3-pool
 Replaces: python3-psycopg3-pool
 Description: PostgreSQL database adapter for Python 3: connection pool
@@ -119,6 +166,7 @@ Depends:
  ${sphinxdoc:Depends}
 Recommends:
  python3-doc,
+ python-numpy-doc,
  python-psycopg2-doc
 Suggests: python3-psycopg
 Conflicts: python-psycopg3-doc

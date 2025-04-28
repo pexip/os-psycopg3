@@ -5,23 +5,24 @@ Cython adapters for numeric types.
 # Copyright (C) 2020 The Psycopg Team
 
 cimport cython
-
-from libc.stdint cimport *
-from libc.string cimport memcpy, strlen
 from cpython.mem cimport PyMem_Free
+from libc.stdint cimport *
+from libc.string cimport memcpy, memset, strlen
 from cpython.dict cimport PyDict_GetItem, PyDict_SetItem
-from cpython.long cimport (
-    PyLong_FromString, PyLong_FromLong, PyLong_FromLongLong,
-    PyLong_FromUnsignedLong, PyLong_AsLongLong)
+from cpython.long cimport PyLong_AsLongLong, PyLong_FromLong, PyLong_FromLongLong
+from cpython.long cimport PyLong_FromString, PyLong_FromUnsignedLong
 from cpython.bytes cimport PyBytes_AsStringAndSize
-from cpython.float cimport PyFloat_FromDouble, PyFloat_AsDouble
+from cpython.float cimport PyFloat_AsDouble, PyFloat_FromDouble
 from cpython.unicode cimport PyUnicode_DecodeUTF8
 
-from decimal import Decimal, Context, DefaultContext
+import sys
+from decimal import Context, Decimal, DefaultContext
 
 from psycopg_c._psycopg cimport endian
+
 from psycopg import errors as e
 from psycopg._wrappers import Int2, Int4, Int8, IntNumeric
+
 
 cdef extern from "Python.h":
     # work around https://github.com/cython/cython/issues/3909
@@ -47,14 +48,14 @@ int pg_lltoa(int64_t value, char *a);
     const int MAXINT8LEN
 
 
-cdef class _NumberDumper(CDumper):
+cdef class _IntDumper(CDumper):
 
     format = PQ_TEXT
 
     cdef Py_ssize_t cdump(self, obj, bytearray rv, Py_ssize_t offset) except -1:
         return dump_int_to_text(obj, rv, offset)
 
-    def quote(self, obj) -> bytearray:
+    def quote(self, obj) -> Buffer | None:
         cdef Py_ssize_t length
 
         rv = PyByteArray_FromStringAndSize("", 0)
@@ -69,26 +70,34 @@ cdef class _NumberDumper(CDumper):
         return rv
 
 
+cdef class _IntOrSubclassDumper(_IntDumper):
+
+    format = PQ_TEXT
+
+    cdef Py_ssize_t cdump(self, obj, bytearray rv, Py_ssize_t offset) except -1:
+        return dump_int_or_sub_to_text(obj, rv, offset)
+
+
 @cython.final
-cdef class Int2Dumper(_NumberDumper):
+cdef class Int2Dumper(_IntOrSubclassDumper):
 
     oid = oids.INT2_OID
 
 
 @cython.final
-cdef class Int4Dumper(_NumberDumper):
+cdef class Int4Dumper(_IntOrSubclassDumper):
 
     oid = oids.INT4_OID
 
 
 @cython.final
-cdef class Int8Dumper(_NumberDumper):
+cdef class Int8Dumper(_IntOrSubclassDumper):
 
     oid = oids.INT8_OID
 
 
 @cython.final
-cdef class IntNumericDumper(_NumberDumper):
+cdef class IntNumericDumper(_IntOrSubclassDumper):
 
     oid = oids.NUMERIC_OID
 
@@ -100,13 +109,7 @@ cdef class Int2BinaryDumper(CDumper):
     oid = oids.INT2_OID
 
     cdef Py_ssize_t cdump(self, obj, bytearray rv, Py_ssize_t offset) except -1:
-        cdef int16_t *buf = <int16_t *>CDumper.ensure_size(
-            rv, offset, sizeof(int16_t))
-        cdef int16_t val = <int16_t>PyLong_AsLongLong(obj)
-        # swap bytes if needed
-        cdef uint16_t *ptvar = <uint16_t *>(&val)
-        buf[0] = endian.htobe16(ptvar[0])
-        return sizeof(int16_t)
+        return dump_int_to_int2_binary(obj, rv, offset)
 
 
 @cython.final
@@ -116,13 +119,7 @@ cdef class Int4BinaryDumper(CDumper):
     oid = oids.INT4_OID
 
     cdef Py_ssize_t cdump(self, obj, bytearray rv, Py_ssize_t offset) except -1:
-        cdef int32_t *buf = <int32_t *>CDumper.ensure_size(
-            rv, offset, sizeof(int32_t))
-        cdef int32_t val = <int32_t>PyLong_AsLongLong(obj)
-        # swap bytes if needed
-        cdef uint32_t *ptvar = <uint32_t *>(&val)
-        buf[0] = endian.htobe32(ptvar[0])
-        return sizeof(int32_t)
+        return dump_int_to_int4_binary(obj, rv, offset)
 
 
 @cython.final
@@ -132,13 +129,7 @@ cdef class Int8BinaryDumper(CDumper):
     oid = oids.INT8_OID
 
     cdef Py_ssize_t cdump(self, obj, bytearray rv, Py_ssize_t offset) except -1:
-        cdef int64_t *buf = <int64_t *>CDumper.ensure_size(
-            rv, offset, sizeof(int64_t))
-        cdef int64_t val = PyLong_AsLongLong(obj)
-        # swap bytes if needed
-        cdef uint64_t *ptvar = <uint64_t *>(&val)
-        buf[0] = endian.htobe64(ptvar[0])
-        return sizeof(int64_t)
+        return dump_int_to_int8_binary(obj, rv, offset)
 
 
 cdef extern from *:
@@ -176,7 +167,9 @@ cdef class IntNumericBinaryDumper(CDumper):
         return dump_int_to_numeric_binary(obj, rv, offset)
 
 
-cdef class IntDumper(_NumberDumper):
+cdef class IntDumper(CDumper):
+
+    format = PQ_TEXT
 
     cdef Py_ssize_t cdump(self, obj, bytearray rv, Py_ssize_t offset) except -1:
         raise TypeError(
@@ -266,7 +259,9 @@ cdef class Int2BinaryLoader(CLoader):
     format = PQ_BINARY
 
     cdef object cload(self, const char *data, size_t length):
-        return PyLong_FromLong(<int16_t>endian.be16toh((<uint16_t *>data)[0]))
+        cdef int16_t bedata
+        memcpy(&bedata, data, sizeof(bedata))
+        return PyLong_FromLong(<int16_t>endian.be16toh(bedata))
 
 
 @cython.final
@@ -275,7 +270,9 @@ cdef class Int4BinaryLoader(CLoader):
     format = PQ_BINARY
 
     cdef object cload(self, const char *data, size_t length):
-        return PyLong_FromLong(<int32_t>endian.be32toh((<uint32_t *>data)[0]))
+        cdef int32_t bedata
+        memcpy(&bedata, data, sizeof(bedata))
+        return PyLong_FromLong(<int32_t>endian.be32toh(bedata))
 
 
 @cython.final
@@ -284,7 +281,9 @@ cdef class Int8BinaryLoader(CLoader):
     format = PQ_BINARY
 
     cdef object cload(self, const char *data, size_t length):
-        return PyLong_FromLongLong(<int64_t>endian.be64toh((<uint64_t *>data)[0]))
+        cdef int64_t bedata
+        memcpy(&bedata, data, sizeof(bedata))
+        return PyLong_FromLongLong(<int64_t>endian.be64toh(bedata))
 
 
 @cython.final
@@ -293,7 +292,9 @@ cdef class OidBinaryLoader(CLoader):
     format = PQ_BINARY
 
     cdef object cload(self, const char *data, size_t length):
-        return PyLong_FromUnsignedLong(endian.be32toh((<uint32_t *>data)[0]))
+        cdef uint32_t bedata
+        memcpy(&bedata, data, sizeof(bedata))
+        return PyLong_FromUnsignedLong(endian.be32toh(bedata))
 
 
 cdef class _FloatDumper(CDumper):
@@ -310,7 +311,7 @@ cdef class _FloatDumper(CDumper):
         PyMem_Free(out)
         return length
 
-    def quote(self, obj) -> bytes:
+    def quote(self, obj) -> Buffer | None:
         value = bytes(self.dump(obj))
         cdef PyObject *ptr = PyDict_GetItem(_special_float, value)
         if ptr != NULL:
@@ -345,11 +346,13 @@ cdef class FloatBinaryDumper(CDumper):
 
     cdef Py_ssize_t cdump(self, obj, bytearray rv, Py_ssize_t offset) except -1:
         cdef double d = PyFloat_AsDouble(obj)
-        cdef uint64_t *intptr = <uint64_t *>&d
+        cdef uint64_t ival
+        memcpy(&ival, &d, sizeof(ival))
+        cdef uint64_t beval = endian.htobe64(ival)
         cdef uint64_t *buf = <uint64_t *>CDumper.ensure_size(
-            rv, offset, sizeof(uint64_t))
-        buf[0] = endian.htobe64(intptr[0])
-        return sizeof(uint64_t)
+            rv, offset, sizeof(beval))
+        memcpy(buf, &beval, sizeof(beval))
+        return sizeof(beval)
 
 
 @cython.final
@@ -360,11 +363,13 @@ cdef class Float4BinaryDumper(CDumper):
 
     cdef Py_ssize_t cdump(self, obj, bytearray rv, Py_ssize_t offset) except -1:
         cdef float f = <float>PyFloat_AsDouble(obj)
-        cdef uint32_t *intptr = <uint32_t *>&f
+        cdef uint32_t ival
+        memcpy(&ival, &f, sizeof(ival))
+        cdef uint32_t beval = endian.htobe32(ival)
         cdef uint32_t *buf = <uint32_t *>CDumper.ensure_size(
-            rv, offset, sizeof(uint32_t))
-        buf[0] = endian.htobe32(intptr[0])
-        return sizeof(uint32_t)
+            rv, offset, sizeof(beval))
+        memcpy(buf, &beval, sizeof(beval))
+        return sizeof(beval)
 
 
 @cython.final
@@ -385,11 +390,12 @@ cdef class Float4BinaryLoader(CLoader):
     format = PQ_BINARY
 
     cdef object cload(self, const char *data, size_t length):
-        cdef uint32_t asint = endian.be32toh((<uint32_t *>data)[0])
-        # avoid warning:
-        # dereferencing type-punned pointer will break strict-aliasing rules
-        cdef char *swp = <char *>&asint
-        return PyFloat_FromDouble((<float *>swp)[0])
+        cdef uint32_t bedata
+        memcpy(&bedata, data, sizeof(bedata))
+        cdef uint32_t asint = endian.be32toh(bedata)
+        cdef float f
+        memcpy(&f, &asint, sizeof(asint))
+        return PyFloat_FromDouble(f)
 
 
 @cython.final
@@ -398,9 +404,12 @@ cdef class Float8BinaryLoader(CLoader):
     format = PQ_BINARY
 
     cdef object cload(self, const char *data, size_t length):
-        cdef uint64_t asint = endian.be64toh((<uint64_t *>data)[0])
-        cdef char *swp = <char *>&asint
-        return PyFloat_FromDouble((<double *>swp)[0])
+        cdef uint64_t bedata
+        memcpy(&bedata, data, sizeof(bedata))
+        cdef uint64_t asint = endian.be64toh(bedata)
+        cdef double d
+        memcpy(&d, &asint, sizeof(asint))
+        return PyFloat_FromDouble(d)
 
 
 @cython.final
@@ -412,7 +421,7 @@ cdef class DecimalDumper(CDumper):
     cdef Py_ssize_t cdump(self, obj, bytearray rv, Py_ssize_t offset) except -1:
         return dump_decimal_to_text(obj, rv, offset)
 
-    def quote(self, obj) -> bytes:
+    def quote(self, obj) -> Buffer | None:
         value = bytes(self.dump(obj))
         cdef PyObject *ptr = PyDict_GetItem(_special_decimal, value)
         if ptr != NULL:
@@ -455,24 +464,31 @@ cdef class NumericBinaryLoader(CLoader):
 
     cdef object cload(self, const char *data, size_t length):
 
-        cdef uint16_t *data16 = <uint16_t *>data
-        cdef uint16_t ndigits = endian.be16toh(data16[0])
-        cdef int16_t weight = <int16_t>endian.be16toh(data16[1])
-        cdef uint16_t sign = endian.be16toh(data16[2])
-        cdef uint16_t dscale = endian.be16toh(data16[3])
+        cdef uint16_t behead[4]
+        memcpy(&behead, data, sizeof(behead))
+        cdef uint16_t ndigits = endian.be16toh(behead[0])
+        cdef int16_t weight = <int16_t>endian.be16toh(behead[1])
+        cdef uint16_t sign = endian.be16toh(behead[2])
+        cdef uint16_t dscale = endian.be16toh(behead[3])
+
         cdef int shift
         cdef int i
         cdef PyObject *pctx
         cdef object key
+        cdef const char *digitptr
+        cdef uint16_t bedigit
 
         if sign == NUMERIC_POS or sign == NUMERIC_NEG:
             if length != (4 + ndigits) * sizeof(uint16_t):
                 raise e.DataError("bad ndigits in numeric binary representation")
 
             val = 0
+            digitptr = data + sizeof(behead)
             for i in range(ndigits):
+                memcpy(&bedigit, digitptr, sizeof(bedigit))
+                digitptr += sizeof(bedigit)
                 val *= 10_000
-                val += endian.be16toh(data16[i + 4])
+                val += endian.be16toh(bedigit)
 
             shift = dscale - (ndigits - weight - 1) * DEC_DIGITS
 
@@ -505,30 +521,58 @@ cdef class DecimalBinaryDumper(CDumper):
         return dump_decimal_to_numeric_binary(obj, rv, offset)
 
 
+_int_classes = None
+
+
+cdef class _MixedNumericDumper(CDumper):
+
+    oid = oids.NUMERIC_OID
+
+    def __cinit__(self, cls, context: AdaptContext | None = None):
+        global _int_classes
+
+        if _int_classes is None:
+            if "numpy" in sys.modules:
+                import numpy
+                _int_classes = (int, numpy.integer)
+            else:
+                _int_classes = int
+
+
 @cython.final
-cdef class NumericDumper(CDumper):
+cdef class NumericDumper(_MixedNumericDumper):
 
     format = PQ_TEXT
-    oid = oids.NUMERIC_OID
 
     cdef Py_ssize_t cdump(self, obj, bytearray rv, Py_ssize_t offset) except -1:
-        if isinstance(obj, int):
+        if type(obj) is int:  # fast path
+            return dump_int_to_text(obj, rv, offset)
+        elif isinstance(obj, Decimal):
+            return dump_decimal_to_text(obj, rv, offset)
+        elif isinstance(obj, _int_classes):
             return dump_int_to_text(obj, rv, offset)
         else:
-            return dump_decimal_to_text(obj, rv, offset)
+            raise TypeError(
+                f"class {type(self).__name__} cannot dump {type(obj).__name__}"
+            )
 
 
 @cython.final
-cdef class NumericBinaryDumper(CDumper):
+cdef class NumericBinaryDumper(_MixedNumericDumper):
 
     format = PQ_BINARY
-    oid = oids.NUMERIC_OID
 
     cdef Py_ssize_t cdump(self, obj, bytearray rv, Py_ssize_t offset) except -1:
-        if isinstance(obj, int):
+        if type(obj) is int:
             return dump_int_to_numeric_binary(obj, rv, offset)
-        else:
+        elif isinstance(obj, Decimal):
             return dump_decimal_to_numeric_binary(obj, rv, offset)
+        elif isinstance(obj, _int_classes):
+            return dump_int_to_numeric_binary(int(obj), rv, offset)
+        else:
+            raise TypeError(
+                f"class {type(self).__name__} cannot dump {type(obj).__name__}"
+            )
 
 
 cdef Py_ssize_t dump_decimal_to_text(obj, bytearray rv, Py_ssize_t offset) except -1:
@@ -574,28 +618,30 @@ cdef Py_ssize_t dump_decimal_to_numeric_binary(
     cdef int sign = t[0]
     cdef tuple digits = t[1]
     cdef uint16_t *buf
+    cdef uint16_t behead[4]
     cdef Py_ssize_t length
 
     cdef object pyexp = t[2]
     cdef const char *bexp
+
     if not isinstance(pyexp, int):
         # Handle inf, nan
-        length = 4 * sizeof(uint16_t)
-        buf = <uint16_t *>CDumper.ensure_size(rv, offset, length)
-        buf[0] = 0
-        buf[1] = 0
-        buf[3] = 0
+        buf = <uint16_t *>CDumper.ensure_size(rv, offset, sizeof(behead))
+        behead[0] = 0
+        behead[1] = 0
+        behead[3] = 0
         bexp = PyUnicode_AsUTF8(pyexp)
         if bexp[0] == b'n' or bexp[0] == b'N':
-            buf[2] = endian.htobe16(NUMERIC_NAN)
+            behead[2] = endian.htobe16(NUMERIC_NAN)
         elif bexp[0] == b'F':
             if sign:
-                buf[2] = endian.htobe16(NUMERIC_NINF)
+                behead[2] = endian.htobe16(NUMERIC_NINF)
             else:
-                buf[2] = endian.htobe16(NUMERIC_PINF)
+                behead[2] = endian.htobe16(NUMERIC_PINF)
         else:
             raise e.DataError(f"unexpected decimal exponent: {pyexp}")
-        return length
+        memcpy(buf, behead, sizeof(behead))
+        return sizeof(behead)
 
     cdef int exp = pyexp
     cdef uint16_t ndigits = <uint16_t>len(digits)
@@ -614,13 +660,13 @@ cdef Py_ssize_t dump_decimal_to_numeric_binary(
         ndigits += exp % DEC_DIGITS
 
     if nzdigits == 0:
-        length = 4 * sizeof(uint16_t)
-        buf = <uint16_t *>CDumper.ensure_size(rv, offset, length)
-        buf[0] = 0  # ndigits
-        buf[1] = 0  # weight
-        buf[2] = endian.htobe16(NUMERIC_POS)  # sign
-        buf[3] = endian.htobe16(dscale)
-        return length
+        buf = <uint16_t *>CDumper.ensure_size(rv, offset, sizeof(behead))
+        behead[0] = 0  # ndigits
+        behead[1] = 0  # weight
+        behead[2] = endian.htobe16(NUMERIC_POS)  # sign
+        behead[3] = endian.htobe16(dscale)
+        memcpy(buf, behead, sizeof(behead))
+        return sizeof(behead)
 
     # Equivalent of 0-padding left to align the py digits to the pg digits
     # but without changing the digits tuple.
@@ -635,30 +681,55 @@ cdef Py_ssize_t dump_decimal_to_numeric_binary(
 
     cdef int tmp = nzdigits + wi
     cdef int pgdigits = tmp // DEC_DIGITS + (tmp % DEC_DIGITS and 1)
-    length = (pgdigits + 4) * sizeof(uint16_t)
+    length = sizeof(behead) + pgdigits * sizeof(uint16_t)
     buf = <uint16_t*>CDumper.ensure_size(rv, offset, length)
-    buf[0] = endian.htobe16(pgdigits)
-    buf[1] = endian.htobe16(<int16_t>((ndigits + exp) // DEC_DIGITS - 1))
-    buf[2] = endian.htobe16(NUMERIC_NEG) if sign else endian.htobe16(NUMERIC_POS)
-    buf[3] = endian.htobe16(dscale)
+    behead[0] = endian.htobe16(pgdigits)
+    behead[1] = endian.htobe16(<int16_t>((ndigits + exp) // DEC_DIGITS - 1))
+    behead[2] = endian.htobe16(NUMERIC_NEG) if sign else endian.htobe16(NUMERIC_POS)
+    behead[3] = endian.htobe16(dscale)
+    memcpy(buf, behead, sizeof(behead))
+    buf += 4
 
-    cdef uint16_t pgdigit = 0
-    cdef int bi = 4
+    cdef uint16_t pgdigit = 0, bedigit
     for i in range(nzdigits):
         pgdigit += pydigit_weights[wi] * <int>(digits[i])
         wi += 1
         if wi >= DEC_DIGITS:
-            buf[bi] = endian.htobe16(pgdigit)
+            bedigit = endian.htobe16(pgdigit)
+            memcpy(buf, &bedigit, sizeof(bedigit))
+            buf += 1
             pgdigit = wi = 0
-            bi += 1
 
     if pgdigit:
-        buf[bi] = endian.htobe16(pgdigit)
+        bedigit = endian.htobe16(pgdigit)
+        memcpy(buf, &bedigit, sizeof(bedigit))
 
     return length
 
 
 cdef Py_ssize_t dump_int_to_text(obj, bytearray rv, Py_ssize_t offset) except -1:
+    cdef long long val
+    cdef int overflow
+    cdef char *buf
+    cdef char *src
+    cdef Py_ssize_t length
+
+    val = PyLong_AsLongLongAndOverflow(obj, &overflow)
+    if not overflow:
+        buf = CDumper.ensure_size(rv, offset, MAXINT8LEN + 1)
+        length = pg_lltoa(val, buf)
+    else:
+        b = bytes(str(obj), "utf-8")
+        PyBytes_AsStringAndSize(b, &src, &length)
+        buf = CDumper.ensure_size(rv, offset, length)
+        memcpy(buf, src, length)
+
+    return length
+
+
+cdef Py_ssize_t dump_int_or_sub_to_text(
+    obj, bytearray rv, Py_ssize_t offset
+) except -1:
     cdef long long val
     cdef int overflow
     cdef char *buf
@@ -683,6 +754,36 @@ cdef Py_ssize_t dump_int_to_text(obj, bytearray rv, Py_ssize_t offset) except -1
     return length
 
 
+cdef Py_ssize_t dump_int_to_int2_binary(
+    obj, bytearray rv, Py_ssize_t offset
+) except -1:
+    cdef int16_t val = <int16_t>PyLong_AsLongLong(obj)
+    cdef int16_t *buf = <int16_t *>CDumper.ensure_size(rv, offset, sizeof(obj))
+    cdef uint16_t beval = endian.htobe16(val)  # swap bytes if needed
+    memcpy(buf, &beval, sizeof(beval))
+    return sizeof(val)
+
+
+cdef Py_ssize_t dump_int_to_int4_binary(
+    obj, bytearray rv, Py_ssize_t offset
+) except -1:
+    cdef int32_t val = <int32_t>PyLong_AsLongLong(obj)
+    cdef int32_t *buf = <int32_t *>CDumper.ensure_size(rv, offset, sizeof(val))
+    cdef uint32_t beval = endian.htobe32(val)  # swap bytes if needed
+    memcpy(buf, &beval, sizeof(beval))
+    return sizeof(val)
+
+
+cdef Py_ssize_t dump_int_to_int8_binary(
+    obj, bytearray rv, Py_ssize_t offset
+) except -1:
+    cdef int64_t val = PyLong_AsLongLong(obj)
+    cdef int64_t *buf = <int64_t *>CDumper.ensure_size(rv, offset, sizeof(val))
+    cdef uint64_t beval = endian.htobe64(val)  # swap bytes if needed
+    memcpy(buf, &beval, sizeof(beval))
+    return sizeof(val)
+
+
 cdef Py_ssize_t dump_int_to_numeric_binary(obj, bytearray rv, Py_ssize_t offset) except -1:
     # Calculate the number of PG digits required to store the number
     cdef uint16_t ndigits
@@ -696,20 +797,24 @@ cdef Py_ssize_t dump_int_to_numeric_binary(obj, bytearray rv, Py_ssize_t offset)
     cdef Py_ssize_t length = sizeof(uint16_t) * (ndigits + 4)
     cdef uint16_t *buf
     buf = <uint16_t *><void *>CDumper.ensure_size(rv, offset, length)
-    buf[0] = endian.htobe16(ndigits)
-    buf[1] = endian.htobe16(ndigits - 1)  # weight
-    buf[2] = endian.htobe16(sign)
-    buf[3] = 0  # dscale
+
+    cdef uint16_t behead[4]
+    behead[0] = endian.htobe16(ndigits)
+    behead[1] = endian.htobe16(ndigits - 1)  # weight
+    behead[2] = endian.htobe16(sign)
+    behead[3] = 0  # dscale
+    memcpy(buf, behead, sizeof(behead))
 
     cdef int i = 4 + ndigits - 1
-    cdef uint16_t rem
+    cdef uint16_t rem, berem
     while obj:
         rem = obj % 10000
         obj //= 10000
-        buf[i] = endian.htobe16(rem)
+        berem = endian.htobe16(rem)
+        memcpy(buf + i, &berem, sizeof(berem))
         i -= 1
     while i > 3:
-        buf[i] = 0
+        memset(buf + i, 0, sizeof(buf[0]))
         i -= 1
 
     return length

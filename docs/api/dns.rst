@@ -89,8 +89,8 @@ server before performing a connection.
 
 .. automethod:: psycopg.AsyncConnection._get_connection_params
 
-   .. warning::
-       This is an experimental method.
+    .. warning::
+        This is an experimental method.
 
 
 .. function:: resolve_hostaddr_async(params)

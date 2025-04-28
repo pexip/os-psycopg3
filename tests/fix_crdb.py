@@ -1,9 +1,10 @@
-from typing import Optional
+from __future__ import annotations
 
 import pytest
 
-from .utils import VersionCheck
 from psycopg.crdb import CrdbConnection
+
+from .utils import VersionCheck
 
 
 def pytest_configure(config):
@@ -53,7 +54,7 @@ def check_crdb_version(got, mark):
 is_crdb = CrdbConnection.is_crdb
 
 
-def crdb_skip_message(reason: Optional[str]) -> str:
+def crdb_skip_message(reason: str | None) -> str:
     msg = ""
     if reason:
         msg = reason
@@ -76,11 +77,6 @@ def crdb_encoding(*args):
     return skip_crdb(*args, reason="encoding")
 
 
-def crdb_time_precision(*args):
-    """Mark tests that fail on CockroachDB because time doesn't support precision"""
-    return skip_crdb(*args, reason="time precision")
-
-
 def crdb_scs_off(*args):
     return skip_crdb(*args, reason="standard_conforming_strings=off")
 
@@ -95,6 +91,7 @@ _crdb_reasons = {
     "cancel": 41335,
     "cast adds tz": 51692,
     "cidr": 18846,
+    "close portal": None,
     "composite": 27792,
     "copy array": 82792,
     "copy canceled": 81559,

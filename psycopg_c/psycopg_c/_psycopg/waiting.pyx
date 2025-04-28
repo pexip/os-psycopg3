@@ -51,7 +51,7 @@ static int
 wait_c_impl(int fileno, int wait, float timeout)
 {
     int select_rv;
-    int rv = 0;
+    int rv = -1;
 
 #if defined(HAVE_POLL) && !defined(HAVE_BROKEN_POLL)
 
@@ -71,16 +71,26 @@ wait_c_impl(int fileno, int wait, float timeout)
         timeout_ms = (int)(timeout * SEC_TO_MS);
     }
 
+retry_eintr:
+
     Py_BEGIN_ALLOW_THREADS
     errno = 0;
     select_rv = poll(&input_fd, 1, timeout_ms);
     Py_END_ALLOW_THREADS
 
-    if (select_rv < 0) { goto error; }
-    if (PyErr_CheckSignals()) { goto finally; }
+    /* The grace of PEP 475 */
+    if (errno == EINTR) {
+        goto retry_eintr;
+    }
 
-    if (input_fd.events & POLLIN) { rv |= SELECT_EV_READ; }
-    if (input_fd.events & POLLOUT) { rv |= SELECT_EV_WRITE; }
+    if (PyErr_CheckSignals()) { goto finally; }
+    if (select_rv < 0) { goto error; }  /* poll error */
+
+    rv = 0;  /* success, maybe with timeout */
+    if (select_rv >= 0) {
+        if (input_fd.events & POLLIN) { rv |= SELECT_EV_READ; }
+        if (input_fd.events & POLLOUT) { rv |= SELECT_EV_WRITE; }
+    }
 
 #else
 
@@ -116,22 +126,34 @@ wait_c_impl(int fileno, int wait, float timeout)
         tvptr = &tv;
     }
 
+retry_eintr:
+
     Py_BEGIN_ALLOW_THREADS
     errno = 0;
     select_rv = select(fileno + 1, &ifds, &ofds, &efds, tvptr);
     Py_END_ALLOW_THREADS
 
-    if (select_rv < 0) { goto error; }
-    if (PyErr_CheckSignals()) { goto finally; }
+    /* The grace of PEP 475 */
+    if (errno == EINTR) {
+        goto retry_eintr;
+    }
 
-    if (FD_ISSET(fileno, &ifds)) { rv |= SELECT_EV_READ; }
-    if (FD_ISSET(fileno, &ofds)) { rv |= SELECT_EV_WRITE; }
+    if (PyErr_CheckSignals()) { goto finally; }
+    if (select_rv < 0) { goto error; }  /* select error */
+
+    rv = 0;
+    if (select_rv > 0) {
+        if (FD_ISSET(fileno, &ifds)) { rv |= SELECT_EV_READ; }
+        if (FD_ISSET(fileno, &ofds)) { rv |= SELECT_EV_WRITE; }
+    }
 
 #endif  /* HAVE_POLL */
 
     return rv;
 
 error:
+
+    rv = -1;
 
 #ifdef MS_WINDOWS
     if (select_rv == SOCKET_ERROR) {
@@ -148,27 +170,27 @@ error:
 
 finally:
 
-    return -1;
+    return rv;
 
 }
     """
     cdef int wait_c_impl(int fileno, int wait, float timeout) except -1
 
 
-def wait_c(gen: PQGen[RV], int fileno, timeout = None) -> RV:
+def wait_c(gen: PQGen[RV], int fileno, interval = None) -> RV:
     """
     Wait for a generator using poll or select.
     """
-    cdef float ctimeout
+    cdef float cinterval
     cdef int wait, ready
     cdef PyObject *pyready
 
-    if timeout is None:
-        ctimeout = -1.0
+    if interval is None:
+        cinterval = -1.0
     else:
-        ctimeout = <float>float(timeout)
-        if ctimeout < 0.0:
-            ctimeout = -1.0
+        cinterval = <float>float(interval)
+        if cinterval < 0.0:
+            cinterval = -1.0
 
     send = gen.send
 
@@ -176,9 +198,9 @@ def wait_c(gen: PQGen[RV], int fileno, timeout = None) -> RV:
         wait = next(gen)
 
         while True:
-            ready = wait_c_impl(fileno, wait, ctimeout)
-            if ready == 0:
-                continue
+            ready = wait_c_impl(fileno, wait, cinterval)
+            if ready == READY_NONE:
+                pyready = <PyObject *>PY_READY_NONE
             elif ready == READY_R:
                 pyready = <PyObject *>PY_READY_R
             elif ready == READY_RW:
@@ -191,5 +213,5 @@ def wait_c(gen: PQGen[RV], int fileno, timeout = None) -> RV:
             wait = PyObject_CallFunctionObjArgs(send, pyready, NULL)
 
     except StopIteration as ex:
-        rv: RV = ex.args[0] if ex.args else None
+        rv: RV = ex.value
         return rv

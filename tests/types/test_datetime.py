@@ -4,6 +4,7 @@ import pytest
 
 from psycopg import DataError, pq, sql
 from psycopg.adapt import PyFormat
+from psycopg._compat import ZoneInfo
 
 crdb_skip_datestyle = pytest.mark.crdb("skip", reason="set datestyle/intervalstyle")
 crdb_skip_negative_interval = pytest.mark.crdb("skip", reason="negative interval")
@@ -129,7 +130,8 @@ class TestDate:
         # NOTE: this is an example in the docs. Make sure it doesn't regress when
         # adding binary datetime adapters
         from datetime import date
-        from psycopg.types.datetime import DateLoader, DateDumper
+
+        from psycopg.types.datetime import DateDumper, DateLoader
 
         class InfDateDumper(DateDumper):
             def dump(self, obj):
@@ -569,6 +571,28 @@ class TestTimeTz:
         cur.execute(f"select '{expr}'::timetz = %{fmt_in.value}", (as_time(val),))
         assert cur.fetchone()[0] is True
 
+    @pytest.mark.parametrize("fmt_in", PyFormat)
+    def test_dump_timetz_zoneinfo(self, conn, fmt_in):
+        t = dt.time(12, 0, tzinfo=ZoneInfo("Europe/Rome"))
+        with pytest.raises(DataError, match="Europe/Rome"):
+            conn.execute(f"select %{fmt_in.value}", (t,))
+
+    @pytest.mark.parametrize("fmt_in", PyFormat)
+    def test_dump_timetz_overflow(self, conn, fmt_in):
+        class MyTimeZone(dt.tzinfo):
+            def dst(self, dt_):
+                return None
+
+            def utcoffset(self, dt_):
+                return dt.timedelta(hours=25)
+
+            def tzname(self, dt_):
+                return "lol"
+
+        t = dt.time(12, 0, tzinfo=MyTimeZone())
+        with pytest.raises(ValueError):
+            conn.execute(f"select %{fmt_in.value}", (t,))
+
     @pytest.mark.parametrize(
         "val, expr, timezone",
         [
@@ -688,6 +712,9 @@ class TestInterval:
             ("-30d", "-1 month"),
             ("60d", "2 month"),
             ("-90d", "-3 month"),
+            ("186d", "6 mons 6 days"),
+            ("736d", "2 years 6 days"),
+            ("83063d,81640s,447000m", "1993534:40:40.447"),
         ],
     )
     @pytest.mark.parametrize("fmt_out", pq.Format)
@@ -749,16 +776,17 @@ def as_date(s):
     return dt.date(*map(int, s.split(","))) if "," in s else getattr(dt.date, s)
 
 
-def as_time(s):
-    if "~" in s:
-        s, off = s.split("~")
+def as_time(ts):
+    if "~" in ts:
+        ts, off = ts.split("~")
     else:
         off = None
 
-    if "," in s:
-        rv = dt.time(*map(int, s.split(",")))  # type: ignore[arg-type]
+    if "," in ts:
+        h, m, s, u = (tuple(map(int, ts.split(","))) + (0,) * 3)[:4]
+        rv = dt.time(h, m, s, u)
     else:
-        rv = getattr(dt.time, s)
+        rv = getattr(dt.time, ts)
     if off:
         rv = rv.replace(tzinfo=as_tzinfo(off))
 
@@ -776,11 +804,12 @@ def as_dt(s):
     return rv
 
 
-def as_naive_dt(s):
-    if "," in s:
-        rv = dt.datetime(*map(int, s.split(",")))  # type: ignore[arg-type]
+def as_naive_dt(ts):
+    if "," in ts:
+        y, m, d, h, mi, s, u = (tuple(map(int, ts.split(","))) + (0,) * 6)[:7]
+        rv = dt.datetime(y, m, d, h, mi, s, u)
     else:
-        rv = getattr(dt.datetime, s)
+        rv = getattr(dt.datetime, ts)
 
     return rv
 

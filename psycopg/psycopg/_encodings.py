@@ -4,18 +4,19 @@ Mappings between PostgreSQL and Python encodings.
 
 # Copyright (C) 2020 The Psycopg Team
 
-import re
-import string
-import codecs
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from __future__ import annotations
 
-from .pq._enums import ConnStatus
+import re
+import codecs
+import string
+from typing import TYPE_CHECKING, Any
+
 from .errors import NotSupportedError
 from ._compat import cache
+from .pq._enums import ConnStatus
 
 if TYPE_CHECKING:
-    from .pq.abc import PGconn
-    from .connection import BaseConnection
+    from ._connection_base import BaseConnection
 
 OK = ConnStatus.OK
 
@@ -67,7 +68,7 @@ _py_codecs = {
     "WIN874": "cp874",
 }
 
-py_codecs: Dict[bytes, str] = {}
+py_codecs: dict[bytes, str] = {}
 py_codecs.update((k.encode(), v) for k, v in _py_codecs.items())
 
 # Add an alias without underscore, for lenient lookups
@@ -78,30 +79,13 @@ py_codecs.update(
 pg_codecs = {v: k.encode() for k, v in _py_codecs.items()}
 
 
-def conn_encoding(conn: "Optional[BaseConnection[Any]]") -> str:
+def conn_encoding(conn: BaseConnection[Any] | None) -> str:
     """
     Return the Python encoding name of a psycopg connection.
 
     Default to utf8 if the connection has no encoding info.
     """
-    if not conn or conn.closed:
-        return "utf-8"
-
-    pgenc = conn.pgconn.parameter_status(b"client_encoding") or b"UTF8"
-    return pg2pyenc(pgenc)
-
-
-def pgconn_encoding(pgconn: "PGconn") -> str:
-    """
-    Return the Python encoding name of a libpq connection.
-
-    Default to utf8 if the connection has no encoding info.
-    """
-    if pgconn.status != OK:
-        return "utf-8"
-
-    pgenc = pgconn.parameter_status(b"client_encoding") or b"UTF8"
-    return pg2pyenc(pgenc)
+    return conn.pgconn._encoding if conn else "utf-8"
 
 
 def conninfo_encoding(conninfo: str) -> str:
@@ -117,7 +101,7 @@ def conninfo_encoding(conninfo: str) -> str:
     pgenc = params.get("client_encoding")
     if pgenc:
         try:
-            return pg2pyenc(pgenc.encode())
+            return pg2pyenc(str(pgenc).encode())
         except NotSupportedError:
             pass
 

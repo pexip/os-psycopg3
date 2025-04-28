@@ -11,11 +11,12 @@ Using the `!name` parameter on `!cursor()` will create a `ServerCursor` or
 `AsyncServerCursor`, which can be used to retrieve partial results from a
 database.
 
-A `Connection` can create several cursors, but only one at time can perform
-operations, so they are not the best way to achieve parallelism (you may want
-to operate with several connections instead). All the cursors on the same
-connection have a view of the same session, so they can see each other's
-uncommitted data.
+Other cursor classes can be created by directly instantiating them, or can be
+set as `Connection.cursor_factory` to require them on `!cursor()` call.
+
+This page describe the details of the `!Cursor` class interface. Please refer
+to :ref:`cursor-types` for general information about the different types of
+cursors available in Psycopg.
 
 
 The `!Cursor` class
@@ -100,15 +101,43 @@ The `!Cursor` class
 
         If the queries return data you want to read (e.g. when executing an
         :sql:`INSERT ... RETURNING` or a :sql:`SELECT` with a side-effect),
-        you can specify `!returning=True`; the results will be available in
-        the cursor's state and can be read using `fetchone()` and similar
-        methods. Each input parameter will produce a separate result set: use
-        `nextset()` to read the results of the queries after the first one.
+        you can specify `!returning=True`. This is equivalent of calling
+        `~Cursor.execute()` as many times as the number of items in
+        `!params_seq`, and to store all the results in the cursor's state.
 
-        The value of `rowcount` is set to the cumulated number of rows
-        affected by queries; except when using `!returning=True`, in which
-        case it is set to the number of rows in the current result set (i.e.
-        the first one, until `nextset()` gets called).
+        .. note::
+
+            Using the usual `~Cursor.fetchone()`, `~Cursor.fetchall()`, you
+            will be able to read the records returned *by the first query
+            executed only*. In order to read the results of the following
+            queries you can call `~Cursor.nextset()` to move to the following
+            result set.
+
+            A typical use case for `!executemany(returning=True)` might be to
+            insert a bunch of records and to retrieve the primary keys
+            inserted, taken from a PostgreSQL sequence. In order to do so, you
+            may execute a query such as :sql:`INSERT INTO table VALUES (...)
+            RETURNING id`. Because every :sql:`INSERT` is guaranteed to insert
+            exactly a single record, you can obtain the list of the new ids
+            using a pattern such as::
+
+                cur.executemany(query, records)
+                ids = []
+                while True:
+                    ids.append(cur.fetchone()[0])
+                    if not cur.nextset():
+                        break
+
+        .. warning::
+
+            More explicitly, `!fetchall()` alone will not return all the
+            values returned! You must iterate on the results using
+            `!nextset()`.
+
+        If `!returning=False`, the value of `rowcount` is set to the cumulated
+        number of rows affected by queries. If `!returning=True`, `!rowcount`
+        is set to the number of rows in the current result set (i.e. the first
+        one, until `nextset()` gets called).
 
         See :ref:`query-parameters` for all the details about executing
         queries.
@@ -142,16 +171,23 @@ The `!Cursor` class
 
         This command is similar to execute + iter; however it supports endless
         data streams. The feature is not available in PostgreSQL, but some
-        implementations exist: Materialize `TAIL`__ and CockroachDB
+        implementations exist: Materialize `SUBSCRIBE`__ and CockroachDB
         `CHANGEFEED`__ for instance.
 
         The feature, and the API supporting it, are still experimental.
         Beware... 👀
 
-        .. __: https://materialize.com/docs/sql/tail/#main
+        .. __: https://materialize.com/docs/sql/subscribe/
         .. __: https://www.cockroachlabs.com/docs/stable/changefeed-for.html
 
-        The parameters are the same of `execute()`.
+        The parameters are the same of `execute()`, except for `size` which
+        can be used to set results retrieval by chunks instead of row-by-row.
+
+        .. note::
+
+            This `size` parameter is only available from libpq 17, you can use
+            the `~Capabilities.has_stream_chunked` capability to check if this
+            is supported.
 
         .. warning::
 
@@ -417,8 +453,37 @@ The `!ServerCursor` class
         .. _MOVE: https://www.postgresql.org/docs/current/sql-fetch.html
 
 
-The `!AsyncCursor` class
-------------------------
+The `!RawCursor` and `!RawServerCursor` class
+---------------------------------------------
+
+.. seealso:: See :ref:`raw-query-cursors` for details.
+
+.. autoclass:: RawCursor
+
+    This `Cursor` subclass has the same interface of the parent class but
+    supports placeholders in PostgreSQL format (``$1``, ``$2``...) rather than
+    in Python format (``%s``). Only positional parameters are supported.
+
+    .. versionadded:: 3.2
+
+
+.. autoclass:: RawServerCursor
+
+    This `ServerCursor` subclass has the same interface of the parent class but
+    supports placeholders in PostgreSQL format (``$1``, ``$2``...) rather than
+    in Python format (``%s``). Only positional parameters are supported.
+
+    .. versionadded:: 3.2
+
+
+
+Async cursor classes
+--------------------
+
+Every `Cursor` class has an equivalent `!Async` version exposing the same
+semantic with an `!async` interface. The main interface is described in
+`AsyncCursor`.
+
 
 .. autoclass:: AsyncCursor
 
@@ -478,20 +543,15 @@ The `!AsyncCursor` class
         to iterate on the async cursor results.
 
 
-The `!AsyncClientCursor` class
-------------------------------
 
 .. autoclass:: AsyncClientCursor
 
-    This class is the `!async` equivalent of the `ClientCursor`. The
-    difference are the same shown in `AsyncCursor`.
+    This class is the `!async` equivalent of `ClientCursor`. The differences
+    w.r.t. the sync counterpart are the same described in `AsyncCursor`.
 
     .. versionadded:: 3.1
 
 
-
-The `!AsyncServerCursor` class
-------------------------------
 
 .. autoclass:: AsyncServerCursor
 
@@ -524,3 +584,19 @@ The `!AsyncServerCursor` class
                     ...
 
     .. automethod:: scroll
+
+
+.. autoclass:: AsyncRawCursor
+
+    This class is the `!async` equivalent of `RawCursor`. The differences
+    w.r.t. the sync counterpart are the same described in `AsyncCursor`.
+
+    .. versionadded:: 3.2
+
+
+.. autoclass:: AsyncRawServerCursor
+
+    This class is the `!async` equivalent of `RawServerCursor`. The differences
+    w.r.t. the sync counterpart are the same described in `AsyncServerCursor`.
+
+    .. versionadded:: 3.2

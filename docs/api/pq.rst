@@ -87,6 +87,7 @@ Objects wrapping libpq structures and functions
 .. autoclass:: PGconn()
 
     .. autoattribute:: pgconn_ptr
+    .. automethod:: cancel_conn
     .. automethod:: get_cancel
     .. autoattribute:: needs_password
     .. autoattribute:: used_password
@@ -98,6 +99,8 @@ Objects wrapping libpq structures and functions
            >>> enc = conn.info.encoding
            >>> encrypted = conn.pgconn.encrypt_password(password.encode(enc), rolename.encode(enc))
            b'SCRAM-SHA-256$4096:...
+
+    .. automethod:: change_password
 
     .. automethod:: trace
     .. automethod:: set_trace_flags
@@ -135,9 +138,11 @@ Objects wrapping libpq structures and functions
 .. autoclass:: Conninfo
 .. autoclass:: Escaping
 
-.. autoclass:: PGcancel()
+.. autoclass:: PGcancelConn()
     :members:
 
+.. autoclass:: PGcancel()
+    :members:
 
 Enumerations
 ------------
@@ -148,8 +153,9 @@ Enumerations
     There are other values in this enum, but only `OK` and `BAD` are seen
     after a connection has been established. Other statuses might only be seen
     during the connection phase and are considered internal.
+    `ALLOCATED` is only expected to be returned by `PGcancelConn.status`.
 
-    .. seealso:: :pq:`PQstatus()` returns this value.
+    .. seealso:: :pq:`PQstatus()` and :pq:`PQcancelStatus()` return this value.
 
 
 .. autoclass:: PollingStatus

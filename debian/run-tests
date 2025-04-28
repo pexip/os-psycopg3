@@ -1,0 +1,32 @@
+#! /bin/sh
+# Intended to be run from debian/rules via pybuild.
+
+interpreter="$1"
+dir="$2"
+pybuild_home_base="${3%_c}"
+
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+export PSYCOPG_TEST_DSN="host=localhost dbname=postgres"
+
+add_pythonpath () {
+	export PYTHONPATH="$PYTHONPATH:$1"
+}
+
+if [ "$PSYCOPG_IMPL" = c ] && [ -z "$PYBUILD_AUTOPKGTEST" ]; then
+	# C tests need the pure-Python package as well.  We may not have
+	# built it, but importing it from the source tree is good enough.
+	add_pythonpath "$dir/psycopg"
+fi
+
+markers="not slow"
+if [ "$PSYCOPG_IMPL" = c ]; then
+	# psycopg_pool is only built by architecture-independent builds.
+	markers="$markers and not pool"
+elif [ -z "$PYBUILD_AUTOPKGTEST" ]; then
+	add_pythonpath "${pybuild_home_base}_pool/build"
+fi
+
+exec pg_virtualenv "$interpreter" -m pytest \
+	-m "$markers" \
+	-k "not flakey and not test_async.py and not test_capabilities.py and not test_conninfo_attempts.py and not test_conninfo_attempts_async.py and not test_cursor_common.py and not test_cursor_common_async.py and not test_datetime.py and not test_dns.py and not test_dns_srv.py and not test_exec.py and not test_generators.py and not test_multirange.py and not test_range.py and not test_pgconn.py and not test_shapely.py and not test_string.py"

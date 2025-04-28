@@ -18,26 +18,20 @@ jobs:
     if: true
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.11"
 
       - name: install packages to tests
-        run: pip install ./psycopg[dev,test] codespell
+        run: pip install ./psycopg[dev,test]
 
-      - name: Run black
-        run: black --check --diff .
+      - name: Lint codebase
+        run: pre-commit run -a --color=always
 
-      - name: Run flake8
-        run: flake8
-
-      - name: Run mypy
-        run: mypy
-
-      - name: Check spelling
-        run: codespell
+      - name: Check for sync/async inconsistencies
+        run: ./tools/async_to_sync.py --check --all
 
       - name: Install requirements to generate docs
         run: sudo apt-get install -y libgeos-dev

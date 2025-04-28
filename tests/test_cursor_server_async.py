@@ -1,12 +1,25 @@
 import pytest
+from packaging.version import parse as ver
 
 import psycopg
-from psycopg import rows, errors as e
-from psycopg.pq import Format
+from psycopg import errors as e
+from psycopg import pq, rows
 
-pytestmark = [
-    pytest.mark.crdb_skip("server-side cursor"),
-]
+from .acompat import alist
+from ._test_cursor import ph
+
+pytestmark = pytest.mark.crdb_skip("server-side cursor")
+
+cursor_classes = [psycopg.AsyncServerCursor]
+# Allow to import (not necessarily to run) the module with psycopg 3.1.
+if ver(psycopg.__version__) >= ver("3.2.0.dev0"):
+    cursor_classes.append(psycopg.AsyncRawServerCursor)
+
+
+@pytest.fixture(params=cursor_classes)
+async def aconn(aconn, request, anyio_backend):
+    aconn.server_cursor_factory = request.param
+    return aconn
 
 
 async def test_init_row_factory(aconn):
@@ -25,7 +38,7 @@ async def test_init_row_factory(aconn):
         aconn, "baz", row_factory=rows.namedtuple_row
     ) as cur:
         assert cur.name == "baz"
-        assert cur.row_factory is rows.namedtuple_row  # type: ignore
+        assert cur.row_factory is rows.namedtuple_row
 
 
 async def test_init_params(aconn):
@@ -51,7 +64,7 @@ async def test_funny_name(aconn):
 
 async def test_repr(aconn):
     cur = aconn.cursor("my-name")
-    assert "psycopg.AsyncServerCursor" in str(cur)
+    assert "psycopg.%s" % aconn.server_cursor_factory.__name__ in str(cur)
     assert "my-name" in repr(cur)
     await cur.close()
 
@@ -75,18 +88,18 @@ async def test_description(aconn):
 
 async def test_format(aconn):
     cur = aconn.cursor("foo")
-    assert cur.format == Format.TEXT
+    assert cur.format == pq.Format.TEXT
     await cur.close()
 
     cur = aconn.cursor("foo", binary=True)
-    assert cur.format == Format.BINARY
+    assert cur.format == pq.Format.BINARY
     await cur.close()
 
 
 async def test_query_params(aconn):
     async with aconn.cursor("foo") as cur:
         assert cur._query is None
-        await cur.execute("select generate_series(1, %s) as bar", (3,))
+        await cur.execute(ph(cur, "select generate_series(1, %s) as bar"), (3,))
         assert cur._query is not None
         assert b"declare" in cur._query.query.lower()
         assert b"(1, $1)" in cur._query.query.lower()
@@ -115,7 +128,7 @@ async def test_execute_binary(aconn):
     assert cur.pgresult.fformat(0) == 1
     assert cur.pgresult.get_value(0, 0) == b"\x00\x00\x00\x02"
 
-    await cur.execute("select generate_series(1, 1)")
+    await cur.execute("select generate_series(1, 1)::int4")
     assert (await cur.fetchone()) == (1,)
     assert cur.pgresult.fformat(0) == 0
     assert cur.pgresult.get_value(0, 0) == b"1"
@@ -140,7 +153,7 @@ async def test_binary_cursor_text_override(aconn):
 
 
 async def test_close(aconn, recwarn):
-    if aconn.info.transaction_status == aconn.TransactionStatus.INTRANS:
+    if aconn.info.transaction_status == pq.TransactionStatus.INTRANS:
         # connection dirty from previous failure
         await aconn.execute("close foo")
     recwarn.clear()
@@ -229,7 +242,7 @@ async def test_close_on_error(aconn):
     await cur.execute("select 1")
     with pytest.raises(e.ProgrammingError):
         await aconn.execute("wat")
-    assert aconn.info.transaction_status == aconn.TransactionStatus.INERROR
+    assert aconn.info.transaction_status == pq.TransactionStatus.INERROR
     await cur.close()
 
 
@@ -257,24 +270,27 @@ async def test_context(aconn, recwarn):
 async def test_close_no_clobber(aconn):
     with pytest.raises(e.DivisionByZero):
         async with aconn.cursor("foo") as cur:
-            await cur.execute("select 1 / %s", (0,))
+            await cur.execute(ph(cur, "select 1 / %s"), (0,))
             await cur.fetchall()
 
 
-async def test_warn_close(aconn, recwarn):
+async def test_warn_close(aconn, recwarn, gc_collect):
     recwarn.clear()
     cur = aconn.cursor("foo")
     await cur.execute("select generate_series(1, 10) as bar")
     del cur
+    gc_collect()
     assert ".close()" in str(recwarn.pop(ResourceWarning).message)
 
 
 async def test_execute_reuse(aconn):
     async with aconn.cursor("foo") as cur:
-        await cur.execute("select generate_series(1, %s) as foo", (3,))
+        query = ph(cur, "select generate_series(1, %s) as foo")
+        await cur.execute(query, (3,))
         assert await cur.fetchone() == (1,)
 
-        await cur.execute("select %s::text as bar, %s::text as baz", ("hello", "world"))
+        query = ph(cur, "select %s::text as bar, %s::text as baz")
+        await cur.execute(query, ("hello", "world"))
         assert await cur.fetchone() == ("hello", "world")
         assert cur.description[0].name == "bar"
         assert cur.description[0].type_code == cur.adapters.types["text"].oid
@@ -294,13 +310,13 @@ async def test_execute_error(aconn, stmt):
 async def test_executemany(aconn):
     cur = aconn.cursor("foo")
     with pytest.raises(e.NotSupportedError):
-        await cur.executemany("select %s", [(1,), (2,)])
+        await cur.executemany(ph(cur, "select %s"), [(1,), (2,)])
     await cur.close()
 
 
 async def test_fetchone(aconn):
     async with aconn.cursor("foo") as cur:
-        await cur.execute("select generate_series(1, %s) as bar", (2,))
+        await cur.execute(ph(cur, "select generate_series(1, %s) as bar"), (2,))
         assert await cur.fetchone() == (1,)
         assert await cur.fetchone() == (2,)
         assert await cur.fetchone() is None
@@ -308,7 +324,7 @@ async def test_fetchone(aconn):
 
 async def test_fetchmany(aconn):
     async with aconn.cursor("foo") as cur:
-        await cur.execute("select generate_series(1, %s) as bar", (5,))
+        await cur.execute(ph(cur, "select generate_series(1, %s) as bar"), (5,))
         assert await cur.fetchmany(3) == [(1,), (2,), (3,)]
         assert await cur.fetchone() == (4,)
         assert await cur.fetchmany(3) == [(5,)]
@@ -317,12 +333,12 @@ async def test_fetchmany(aconn):
 
 async def test_fetchall(aconn):
     async with aconn.cursor("foo") as cur:
-        await cur.execute("select generate_series(1, %s) as bar", (3,))
+        await cur.execute(ph(cur, "select generate_series(1, %s) as bar"), (3,))
         assert await cur.fetchall() == [(1,), (2,), (3,)]
         assert await cur.fetchall() == []
 
     async with aconn.cursor("foo") as cur:
-        await cur.execute("select generate_series(1, %s) as bar", (3,))
+        await cur.execute(ph(cur, "select generate_series(1, %s) as bar"), (3,))
         assert await cur.fetchone() == (1,)
         assert await cur.fetchall() == [(2,), (3,)]
         assert await cur.fetchall() == []
@@ -330,13 +346,14 @@ async def test_fetchall(aconn):
 
 async def test_nextset(aconn):
     async with aconn.cursor("foo") as cur:
-        await cur.execute("select generate_series(1, %s) as bar", (3,))
+        await cur.execute(ph(cur, "select generate_series(1, %s) as bar"), (3,))
         assert not cur.nextset()
 
 
 async def test_no_result(aconn):
     async with aconn.cursor("foo") as cur:
-        await cur.execute("select generate_series(1, %s) as bar where false", (3,))
+        query = ph(cur, "select generate_series(1, %s) as bar where false")
+        await cur.execute(query, (3,))
         assert len(cur.description) == 1
         assert (await cur.fetchall()) == []
 
@@ -406,24 +423,20 @@ async def test_rownumber(aconn):
 
 async def test_iter(aconn):
     async with aconn.cursor("foo") as cur:
-        await cur.execute("select generate_series(1, %s) as bar", (3,))
-        recs = []
-        async for rec in cur:
-            recs.append(rec)
+        await cur.execute(ph(cur, "select generate_series(1, %s) as bar"), (3,))
+        recs = await alist(cur)
     assert recs == [(1,), (2,), (3,)]
 
     async with aconn.cursor("foo") as cur:
-        await cur.execute("select generate_series(1, %s) as bar", (3,))
+        await cur.execute(ph(cur, "select generate_series(1, %s) as bar"), (3,))
         assert await cur.fetchone() == (1,)
-        recs = []
-        async for rec in cur:
-            recs.append(rec)
+        recs = await alist(cur)
     assert recs == [(2,), (3,)]
 
 
 async def test_iter_rownumber(aconn):
     async with aconn.cursor("foo") as cur:
-        await cur.execute("select generate_series(1, %s) as bar", (3,))
+        await cur.execute(ph(cur, "select generate_series(1, %s) as bar"), (3,))
         async for row in cur:
             assert cur.rownumber == row[0]
 
@@ -432,11 +445,10 @@ async def test_itersize(aconn, acommands):
     async with aconn.cursor("foo") as cur:
         assert cur.itersize == 100
         cur.itersize = 2
-        await cur.execute("select generate_series(1, %s) as bar", (3,))
+        await cur.execute(ph(cur, "select generate_series(1, %s) as bar"), (3,))
         acommands.popall()  # flush begin and other noise
 
-        async for rec in cur:
-            pass
+        await alist(cur)
         cmds = acommands.popall()
         assert len(cmds) == 2
         for cmd in cmds:
@@ -516,9 +528,7 @@ async def test_hold(aconn):
 @pytest.mark.parametrize("row_factory", ["tuple_row", "namedtuple_row"])
 async def test_steal_cursor(aconn, row_factory):
     cur1 = aconn.cursor()
-    await cur1.execute(
-        "declare test cursor without hold for select generate_series(1, 6) as s"
-    )
+    await cur1.execute("declare test cursor for select generate_series(1, 6) as s")
 
     cur2 = aconn.cursor("test", row_factory=getattr(rows, row_factory))
     # can call fetch without execute

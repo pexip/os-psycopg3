@@ -1,12 +1,11 @@
-from collections import deque
+import time
 from functools import partial
-from typing import List
+from collections import deque
 
 import pytest
 
 import psycopg
-from psycopg import waiting
-from psycopg import pq
+from psycopg import pq, waiting
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 
@@ -25,7 +24,7 @@ def test_connect_operationalerror_pgconn(generators, dsn, monkeypatch):
         except KeyError:
             info = conninfo_to_dict(dsn)
             del info["password"]  # should not raise per check above.
-            dsn = make_conninfo(**info)
+            dsn = make_conninfo("", **info)
 
         gen = generators.connect(dsn)
         with pytest.raises(
@@ -44,6 +43,30 @@ def test_connect_operationalerror_pgconn(generators, dsn, monkeypatch):
         pgconn.exec_(b"select 1")
 
 
+@pytest.mark.libpq(">= 17")
+def test_cancel(pgconn, conn, generators):
+    pgconn.send_query_params(b"SELECT pg_sleep($1)", [b"180"])
+    while not conn.execute(
+        "SELECT count(*) FROM pg_stat_activity"
+        " WHERE query = 'SELECT pg_sleep($1)'"
+        " AND state = 'active'"
+    ).fetchone():
+        time.sleep(0.01)
+    cancel_conn = pgconn.cancel_conn()
+    assert cancel_conn.status != pq.ConnStatus.BAD
+    cancel_conn.start()
+    gen = generators.cancel(cancel_conn)
+    waiting.wait_conn(gen)
+    assert cancel_conn.status == pq.ConnStatus.OK
+
+    res = pgconn.get_result()
+    assert res is not None
+    assert res.status == pq.ExecStatus.FATAL_ERROR
+    assert res.error_field(pq.DiagnosticField.SQLSTATE) == b"57014"
+    while pgconn.is_busy():
+        pgconn.consume_input()
+
+
 @pytest.fixture
 def pipeline(pgconn):
     nb, pgconn.nonblocking = pgconn.nonblocking, True
@@ -56,7 +79,7 @@ def pipeline(pgconn):
 
 
 def _run_pipeline_communicate(pgconn, generators, commands, expected_statuses):
-    actual_statuses: List[pq.ExecStatus] = []
+    actual_statuses: list[pq.ExecStatus] = []
     while len(actual_statuses) != len(expected_statuses):
         if commands:
             gen = generators.pipeline_communicate(pgconn, commands)
@@ -149,8 +172,10 @@ def test_pipeline_communicate_abort(pgconn, pipeline_demo, pipeline, generators)
 
 @pytest.fixture
 def pipeline_uniqviol(pgconn):
-    if not psycopg.Pipeline.is_supported():
-        pytest.skip(psycopg.Pipeline._not_supported_reason())
+    try:
+        psycopg.capabilities.has_pipeline(check=True)
+    except psycopg.NotSupportedError as ex:
+        pytest.skip(str(ex))
     assert pgconn.pipeline_status == 0
     res = pgconn.exec_(b"DROP TABLE IF EXISTS pg_pipeline_uniqviol")
     assert res.status == pq.ExecStatus.COMMAND_OK, res.error_message

@@ -9,22 +9,21 @@ too many temporary Python objects and performing less memory copying.
 # Copyright (C) 2020 The Psycopg Team
 
 cimport cython
-from cpython.ref cimport Py_INCREF, Py_DECREF
+from cpython.ref cimport Py_DECREF, Py_INCREF
 from cpython.set cimport PySet_Add, PySet_Contains
 from cpython.dict cimport PyDict_GetItem, PyDict_SetItem
-from cpython.list cimport (
-    PyList_New, PyList_CheckExact,
-    PyList_GET_ITEM, PyList_SET_ITEM, PyList_GET_SIZE)
+from cpython.list cimport PyList_CheckExact, PyList_GET_ITEM, PyList_GET_SIZE
+from cpython.list cimport PyList_New, PyList_SET_ITEM
 from cpython.bytes cimport PyBytes_AS_STRING
 from cpython.tuple cimport PyTuple_New, PyTuple_SET_ITEM
 from cpython.object cimport PyObject, PyObject_CallFunctionObjArgs
 
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Iterable, Sequence
 
 from psycopg import errors as e
 from psycopg.pq import Format as PqFormat
 from psycopg.rows import Row, RowMaker
-from psycopg._encodings import pgconn_encoding
+from psycopg._encodings import conn_encoding
 
 NoneType = type(None)
 
@@ -98,7 +97,7 @@ cdef class Transformer:
 
     cdef dict _oid_types
 
-    def __cinit__(self, context: Optional["AdaptContext"] = None):
+    def __cinit__(self, context: "AdaptContext" | None = None):
         if context is not None:
             self.adapters = context.adapters
             self.connection = context.connection
@@ -111,7 +110,7 @@ cdef class Transformer:
         self._none_oid = -1
 
     @classmethod
-    def from_context(cls, context: Optional["AdaptContext"]):
+    def from_context(cls, context: "AdaptContext" | None):
         """
         Return a Transformer from an AdaptContext.
 
@@ -122,12 +121,11 @@ cdef class Transformer:
     @property
     def encoding(self) -> str:
         if not self._encoding:
-            conn = self.connection
-            self._encoding = pgconn_encoding(conn.pgconn) if conn else "utf-8"
+            self._encoding = conn_encoding(self.connection)
         return self._encoding
 
     @property
-    def pgresult(self) -> Optional[PGresult]:
+    def pgresult(self) -> PGresult | None:
         return self._pgresult
 
     cpdef set_pgresult(
@@ -424,7 +422,7 @@ cdef class Transformer:
         self.formats = pqformats
         return out
 
-    def load_rows(self, int row0, int row1, object make_row) -> List[Row]:
+    def load_rows(self, int row0, int row1, object make_row) -> list[Row]:
         if self._pgresult is None:
             raise e.InterfaceError("result not set")
 
@@ -494,7 +492,7 @@ cdef class Transformer:
                 Py_DECREF(<object>brecord)
         return records
 
-    def load_row(self, int row, object make_row) -> Optional[Row]:
+    def load_row(self, int row, object make_row) -> Row | None:
         if self._pgresult is None:
             return None
 
@@ -538,7 +536,7 @@ cdef class Transformer:
                 make_row, <PyObject *>record, NULL)
         return record
 
-    cpdef object load_sequence(self, record: Sequence[Optional[Buffer]]):
+    cpdef object load_sequence(self, record: Sequence[Buffer | None]):
         cdef Py_ssize_t nfields = len(record)
         out = PyTuple_New(nfields)
         cdef PyObject *loader  # borrowed RowLoader

@@ -19,24 +19,26 @@ Generic types
 -------------
 
 Psycopg `Connection` and `Cursor` objects are `~typing.Generic` objects and
-support a `!Row` parameter which is the type of the records returned.
+support a `!Row` parameter which is the type of the records returned. The
+parameter can be configured by passing a `!row_factory` parameter to the
+constructor or to the `~Connection.cursor()` method.
 
-By default methods such as `Cursor.fetchall()` return normal tuples of unknown
-size and content. As such, the `connect()` function returns an object of type
-`!psycopg.Connection[Tuple[Any, ...]]` and `Connection.cursor()` returns an
-object of type `!psycopg.Cursor[Tuple[Any, ...]]`. If you are writing generic
-plumbing code it might be practical to use annotations such as
-`!Connection[Any]` and `!Cursor[Any]`.
+By default, methods producing records such as `Cursor.fetchall()` return
+normal tuples of unknown size and content. As such, the `connect()` function
+returns an object of type `!psycopg.Connection[tuple[Any, ...]]` and
+`Connection.cursor()` returns an object of type `!psycopg.Cursor[tuple[Any,
+...]]`. If you are writing generic plumbing code it might be practical to use
+annotations such as `!Connection[Any]` and `!Cursor[Any]`.
 
 .. code:: python
 
-   conn = psycopg.connect() # type is psycopg.Connection[Tuple[Any, ...]]
+   conn = psycopg.connect() # type is psycopg.Connection[tuple[Any, ...]]
 
-   cur = conn.cursor()      # type is psycopg.Cursor[Tuple[Any, ...]]
+   cur = conn.cursor()      # type is psycopg.Cursor[tuple[Any, ...]]
 
-   rec = cur.fetchone()     # type is Optional[Tuple[Any, ...]]
+   rec = cur.fetchone()     # type is tuple[Any, ...] | None
 
-   recs = cur.fetchall()    # type is List[Tuple[Any, ...]]
+   recs = cur.fetchall()    # type is List[tuple[Any, ...]]
 
 
 .. _row-factory-static:
@@ -54,14 +56,71 @@ cursors and annotate the returned objects accordingly. See
 .. code:: python
 
    dconn = psycopg.connect(row_factory=dict_row)
-   # dconn type is psycopg.Connection[Dict[str, Any]]
+   # dconn type is psycopg.Connection[dict[str, Any]]
 
    dcur = conn.cursor(row_factory=dict_row)
    dcur = dconn.cursor()
-   # dcur type is psycopg.Cursor[Dict[str, Any]] in both cases
+   # dcur type is psycopg.Cursor[dict[str, Any]] in both cases
 
    drec = dcur.fetchone()
-   # drec type is Optional[Dict[str, Any]]
+   # drec type is dict[str, Any] | None
+
+
+.. _pool-generic:
+
+Generic pool types
+------------------
+
+.. versionadded:: 3.2
+
+The `~psycopg_pool.ConnectionPool` class and similar are generic on their
+`!connection_class` argument. The `~psycopg_pool.ConnectionPool.connection()`
+method is annotated as returning a connection of that type, and the record
+returned will follow the rule as in :ref:`row-factory-static`.
+
+Note that, at the moment, if you use a generic class as `!connection_class`,
+you will need to specify a `!row_factory` consistently in the `!kwargs`,
+otherwise the typing system and the runtime will not agree.
+
+.. code:: python
+
+    from psycopg import Connection
+    from psycopg.rows import DictRow, dict_row
+
+    with ConnectionPool(
+        connection_class=Connection[DictRow],   # provides type hinting
+        kwargs={"row_factory": dict_row},       # works at runtime
+    ) as pool:
+        # reveal_type(pool): ConnectionPool[Connection[dict[str, Any]]]
+
+        with pool.connection() as conn:
+            # reveal_type(conn): Connection[dict[str, Any]]
+
+            row = conn.execute("SELECT now()").fetchone()
+            # reveal_type(row): dict[str, Any] | None
+
+            print(row)  # {"now": datetime.datetime(...)}
+
+If a non-generic `!Connection` subclass is used (one whose returned row
+type is not parametric) then it's not necessary to specify `!kwargs`:
+
+.. code:: python
+
+    class MyConnection(Connection[DictRow]):
+        def __init__(self, *args, **kwargs):
+            kwargs["row_factory"] = dict_row
+            super().__init__(*args, **kwargs)
+
+    with ConnectionPool(connection_class=MyConnection) as pool:
+        # reveal_type(pool): ConnectionPool[MyConnection]
+
+        with pool.connection() as conn:
+            # reveal_type(conn): MyConnection
+
+            row = conn.execute("SELECT now()").fetchone()
+            # reveal_type(row): dict[str, Any] | None
+
+            print(row)  # {"now": datetime.datetime(...)}
 
 
 .. _example-pydantic:

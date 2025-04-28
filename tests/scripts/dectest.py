@@ -1,8 +1,10 @@
 """
 A quick and rough performance comparison of text vs. binary Decimal adaptation
 """
+
 from random import randrange
 from decimal import Decimal
+
 import psycopg
 from psycopg import sql
 

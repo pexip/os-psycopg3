@@ -98,6 +98,27 @@ use the `psycopg.sql` module::
     ...     .format(sql.Identifier(username), password))
 
 
+.. index::
+    single: PgBouncer
+    double: Query protocol; advanced
+
+.. _advanced-query-protocol:
+
+Extended query Protocol
+-----------------------
+
+In order to use :ref:`server-side-binding`, psycopg normally uses the
+`extended query protocol`__ to communicate with the backend.
+
+In certain context outside pure PostgreSQL, the extended query protocol is not
+supported, for instance to query the `PgBouncer admin console`__. In this case
+you should probably use a `ClientCursor`. See :ref:`simple-query-protocol` for
+details.
+
+.. __: https://www.postgresql.org/docs/current/protocol-flow.html#PROTOCOL-FLOW-EXT-QUERY
+.. __: https://www.pgbouncer.org/usage.html#admin-console
+
+
 .. _multi-statements:
 
 Multiple statements in the same query
@@ -135,7 +156,7 @@ or a :ref:`client-side binding cursor <client-side-binding-cursors>`::
 
 .. warning::
 
-    If a statements must be executed outside a transaction (such as
+    If a statement must be executed outside a transaction (such as
     :sql:`CREATE DATABASE`), it cannot be executed in batch with other
     statements, even if the connection is in autocommit mode::
 
@@ -184,7 +205,8 @@ results, you can use the `Cursor.nextset()` method::
     None  # no more results
 
 Remember though that you cannot use server-side bindings to :ref:`execute more
-than one statement in the same query <multi-statements>`.
+than one statement in the same query <multi-statements>`, if you are passing
+parameters to the query.
 
 
 .. _difference-cast-rules:
@@ -232,6 +254,74 @@ the :sql:`IN` operator instead.
 
 .. __: https://www.postgresql.org/docs/current/functions-comparisons.html
     #id-1.5.8.30.16
+
+
+.. _is-null:
+
+You cannot use ``IS %s``
+------------------------
+
+You cannot use :sql:`IS %s` or :sql:`IS NOT %s`::
+
+    >>> conn.execute("SELECT * FROM foo WHERE field IS %s", [None])
+    Traceback (most recent call last):
+    ...
+    psycopg.errors.SyntaxError: syntax error at or near "$1"
+    LINE 1: SELECT * FROM foo WHERE field IS $1
+                                         ^
+
+This is probably caused by the fact that :sql:`IS` is not a binary predicate in
+PostgreSQL; rather, :sql:`IS NULL` and :sql:`IS NOT NULL` are unary predicates
+and you cannot use :sql:`IS` with anything else on the right hand side.
+Testing in psql:
+
+.. code:: text
+
+    =# SELECT 10 IS 10;
+    ERROR:  syntax error at or near "10"
+    LINE 1: SELECT 10 IS 10;
+                         ^
+
+What you can do is to use `IS [NOT] DISTINCT FROM`__ predicate instead:
+:sql:`IS NOT DISTINCT FROM %s` can be used in place of :sql:`IS %s` (please
+pay attention to the awkwardly reversed :sql:`NOT`)::
+
+    >>> conn.execute("SELECT * FROM foo WHERE field IS NOT DISTINCT FROM %s", [None])
+
+.. __: https://www.postgresql.org/docs/current/functions-comparison.html
+
+Analogously you can use :sql:`IS DISTINCT FROM %s` as a parametric version of
+:sql:`IS NOT %s`.
+
+
+.. _diff-cursors:
+
+Cursors subclasses
+------------------
+
+In `!psycopg2`, a few cursor subclasses allowed to return data in different
+form than tuples. In Psycopg 3 the same can be achieved by setting a :ref:`row
+factory <row-factories>`:
+
+- instead of `~psycopg2.extras.RealDictCursor` you can use
+  `~psycopg.rows.dict_row`;
+
+- instead of `~psycopg2.extras.NamedTupleCursor` you can use
+  `~psycopg.rows.namedtuple_row`.
+
+Other row factories are available in the `psycopg.rows` module. There isn't an
+object behaving like `~psycopg2.extras.DictCursor` (whose results are
+indexable both by column position and by column name).
+
+.. code::
+
+    from psycopg.rows import dict_row, namedtuple_row
+
+    # By default, every cursor will return dicts.
+    conn = psycopg.connect(DSN, row_factory=dict_row)
+
+    # You can set a row factory on a single cursor too.
+    cur = conn.cursor(row_factory=namedtuple_row)
 
 
 .. _diff-adapt:
@@ -314,6 +404,25 @@ encoding. You can select an encoding at connection time using the
 `!client_encoding` connection parameter and you can change the encoding of a
 connection by running a :sql:`SET client_encoding` statement... But why would
 you?
+
+
+.. _transaction-characteristics-and-autocommit:
+
+Transaction characteristics attributes don't affect autocommit sessions
+-----------------------------------------------------------------------
+
+:ref:`Transactions characteristics attributes <transaction-characteristics>`
+such as `~Connection.read_only` don't affect automatically autocommit
+sessions: they only affect the implicit transactions started by non-autocommit
+sessions and the transactions created by the `~Connection.transaction()`
+block (for both autocommit and non-autocommit connections).
+
+If you want to put an autocommit transaction in read-only mode, please use the
+default_transaction_read_only__ GUC, for instance executing the statement
+:sql:`SET default_transaction_read_only TO true`.
+
+.. __: https://www.postgresql.org/docs/current/runtime-config-client.html
+       #GUC-DEFAULT-TRANSACTION-READ-ONLY
 
 
 .. _infinity-datetime:

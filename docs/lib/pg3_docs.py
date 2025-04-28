@@ -1,14 +1,16 @@
+# mypy: ignore-errors
 """
 Customisation for docs generation.
 """
 
 # Copyright (C) 2020 The Psycopg Team
 
+from __future__ import annotations
+
 import os
 import re
 import logging
 import importlib
-from typing import Dict
 from collections import deque
 
 
@@ -48,7 +50,7 @@ def setup(app):
 
 
 # Classes which may have __module__ overwritten
-recovered_classes: Dict[type, str] = {}
+recovered_classes: dict[type, str] = {}
 
 
 def recover_defined_module(m, skip_modules=()):
@@ -81,7 +83,7 @@ def monkeypatch_autodoc():
     """
     Patch autodoc in order to use information found by `recover_defined_module`.
     """
-    from sphinx.ext.autodoc import Documenter, AttributeDocumenter
+    from sphinx.ext.autodoc import AttributeDocumenter, Documenter
 
     orig_doc_get_real_modname = Documenter.get_real_modname
     orig_attr_get_real_modname = AttributeDocumenter.get_real_modname

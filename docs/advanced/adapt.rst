@@ -119,10 +119,59 @@ you only need to implement the `~psycopg.abc.Dumper.dump()` method::
     >>> conn.execute("SELECT xpath('//title/text()', %s)", [elem]).fetchone()[0]
     ['Manual']
 
-Note that it is possible to use a `~psycopg.types.TypesRegistry`, exposed by
-any `~psycopg.abc.AdaptContext`, to obtain information on builtin types, or
-extension types if they have been registered on that context using the
-`~psycopg.types.TypeInfo`\.\ `~psycopg.types.TypeInfo.register()` method.
+.. note::
+
+    You can use a `~psycopg.types.TypesRegistry`, exposed by
+    any `~psycopg.abc.AdaptContext`, to obtain information on builtin types, in
+    the form of a `TypeInfo` object::
+
+        # Global types registry
+        >>> psycopg.adapters.types["text"]
+        <TypeInfo: text (oid: 25, array oid: 1009)>
+
+        # Types registry on a connection
+        >>> conn.adapters.types["integer"]
+        <TypeInfo: int4 (oid: 23, array oid: 1007)>
+
+    The same method can be used to get information about extension types if
+    they have been registered on that context using the
+    `~psycopg.types.TypeInfo`\.\ `~psycopg.types.TypeInfo.register()` method::
+
+        >>> (t := psycopg.types.TypeInfo.fetch(conn, "hstore"))
+        <TypeInfo: hstore (oid: 770082, array oid: 770087)>
+
+        >>> t.register()  # globally
+
+        >>> psycopg.adapters.types["hstore"]
+        <TypeInfo: hstore (oid: 770082, array oid: 770087)>
+
+
+.. _adapt-example-null-str:
+
+Example: converting empty strings to NULL
+-----------------------------------------
+
+.. versionchanged:: 3.2
+
+    The `dump()` method can also return `!None`, which will be stored as
+    :sql:`NULL` in the database.
+
+If you prefer to store missing values as :sql:`NULL`, in the database, but
+your input may contain empty strings, you can subclass the stock string dumper
+to return `!None` upon empty or whitespace-only strings::
+
+    >>> from psycopg.types.string import StrDumper
+
+    >>> class NullStrDumper(StrDumper):
+    ...     def dump(self, obj):
+    ...         if not obj or obj.isspace():
+    ...             return None
+    ...         return super().dump(obj)
+
+    >>> conn.adapters.register_dumper(str, NullStrDumper)
+
+    >>> conn.execute("select %s, %s, %s, %s", ("foo", "", "bar", "  ")).fetchone()
+    ('foo', None, 'bar', None)
 
 
 .. _adapt-example-float:

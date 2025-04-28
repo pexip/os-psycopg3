@@ -1,0 +1,12 @@
+psycopg3 (3.2.1-2) unstable; urgency=medium
+
+   This release allows for usage of binary module python3-psycopg-c
+   which is supplementary to python3-psycopg.  Binary module is detected
+   and used automatically when present; both modules (python3-psycopg
+   and python3-psycopg-c) need to be installed for this to work.
+   It can be used by CPython (e.g. python3.12) but not by PyPy, which
+   will use pure  Python (i.e. slower) implementation.
+   Environment variable PSYCOPG_IMPL can help to choose which
+   implementation will be used - more details in documentation.
+
+ -- Tomasz Rybak <serpent@debian.org>  Thu, 01 Aug 2024 22:05:39 +0200

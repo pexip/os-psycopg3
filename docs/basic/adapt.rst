@@ -34,6 +34,9 @@ Python `bool` values `!True` and `!False` are converted to the equivalent
 
 .. __: https://www.postgresql.org/docs/current/datatype-boolean.html
 
+.. versionchanged:: 3.2
+    `numpy.bool_` values can be dumped too.
+
 
 .. index::
     single: Adaptation; numbers
@@ -72,6 +75,13 @@ promoted to the larger Python counterpart.
     instead, for performance reason or ease of manipulation: you can configure
     an adapter to :ref:`cast PostgreSQL numeric to Python float
     <adapt-example-float>`. This of course may imply a loss of precision.
+
+.. versionchanged:: 3.2
+
+   NumPy integer__ and `floating point`__ values can be dumped too.
+
+.. __: https://numpy.org/doc/stable/reference/arrays.scalars.html#integer-types
+.. __: https://numpy.org/doc/stable/reference/arrays.scalars.html#floating-point-types
 
 
 .. index::
@@ -203,15 +213,18 @@ attribute::
     >>> conn.execute("select '2048-07-08 12:00'::timestamptz").fetchone()[0]
     datetime.datetime(2048, 7, 8, 12, 0, tzinfo=zoneinfo.ZoneInfo(key='Europe/London'))
 
+.. __: https://www.postgresql.org/docs/current/runtime-config-client.html#GUC-TIMEZONE
+
 .. note::
+
     PostgreSQL :sql:`timestamptz` doesn't store "a timestamp with a timezone
     attached": it stores a timestamp always in UTC, which is converted, on
     output, to the connection TimeZone setting::
 
-    >>> conn.execute("SET TIMEZONE to 'Europe/Rome'")  # UTC+2 in summer
+        >>> conn.execute("SET TIMEZONE to 'Europe/Rome'")  # UTC+2 in summer
 
-    >>> conn.execute("SELECT '2042-07-01 12:00Z'::timestamptz").fetchone()[0]  # UTC input
-    datetime.datetime(2042, 7, 1, 14, 0, tzinfo=zoneinfo.ZoneInfo(key='Europe/Rome'))
+        >>> conn.execute("SELECT '2042-07-01 12:00Z'::timestamptz").fetchone()[0]  # UTC input
+        datetime.datetime(2042, 7, 1, 14, 0, tzinfo=zoneinfo.ZoneInfo(key='Europe/Rome'))
 
     Check out the `PostgreSQL documentation about timezones`__ for all the
     details.
@@ -219,7 +232,87 @@ attribute::
     .. __: https://www.postgresql.org/docs/current/datatype-datetime.html
            #DATATYPE-TIMEZONES
 
-.. __: https://www.postgresql.org/docs/current/runtime-config-client.html#GUC-TIMEZONE
+.. warning::
+
+    Times with timezone are silly objects, because you cannot know the offset
+    of a timezone with daylight saving time rules without knowing the date
+    too.
+
+    Although silly, times with timezone are supported both by Python and by
+    PostgreSQL. However they are only supported with fixed offset timezones:
+    Postgres :sql:`timetz` values loaded from the database will result in
+    Python `!time` objects with `!tzinfo` attributes specified as fixed
+    offset, for instance by a `~datetime.timezone` value::
+
+        >>> conn.execute("SET TIMEZONE to 'Europe/Rome'")
+
+        # UTC+1 in winter
+        >>> conn.execute("SELECT '2042-01-01 12:00Z'::timestamptz::timetz").fetchone()[0]
+        datetime.time(13, 0, tzinfo=datetime.timezone(datetime.timedelta(seconds=3600)))
+
+        # UTC+2 in summer
+        >>> conn.execute("SELECT '2042-07-01 12:00Z'::timestamptz::timetz").fetchone()[0]
+        datetime.time(14, 0, tzinfo=datetime.timezone(datetime.timedelta(seconds=7200)))
+
+    Dumping Python `!time` objects is only supported with fixed offset
+    `!tzinfo`, such as the ones returned by Postgres, or by whatever
+    `~datetime.tzinfo` implementation resulting in the time's
+    `~datetime.time.utcoffset` returning a value.
+
+
+.. _date-time-limits:
+
+Dates and times limits in Python
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+PostgreSQL date and time objects can represent values that cannot be
+represented by the Python `datetime` objects:
+
+- dates and timestamps after the year 9999, the special value "infinity";
+- dates and timestamps before the year 1, the special value "-infinity";
+- the time 24:00:00.
+
+Loading these values will raise a `~psycopg.DataError`.
+
+If you need to handle these values you can define your own mapping (for
+instance mapping every value greater than `datetime.date.max` to `!date.max`,
+or the time 24:00 to 00:00) and write a subclass of the default loaders
+implementing the added capability; please see :ref:`this example
+<adapt-example-inf-date>` for a reference.
+
+
+.. index::
+    single: DateStyle
+    single: IntervalStyle
+
+.. _datestyle:
+
+DateStyle and IntervalStyle limits
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Loading :sql:`timestamp with time zone` in text format is only supported if
+the connection DateStyle__ is set to `ISO` format; time and time zone
+representation in other formats is ambiguous.
+
+.. __: https://www.postgresql.org/docs/current/runtime-config-client.html#GUC-DATESTYLE
+
+Furthermore, at the time of writing, the only supported value for
+IntervalStyle__ is ``postgres``; loading :sql:`interval` data in text format
+with a different setting is not supported.
+
+.. __: https://www.postgresql.org/docs/current/runtime-config-client.html#GUC-INTERVALSTYLE
+
+If your server is configured with different settings by default, you can
+obtain a connection in a supported style using the ``options`` connection
+parameter; for example::
+
+   >>> conn = psycopg.connect(options="-c datestyle=ISO,YMD")
+   >>> conn.execute("show datestyle").fetchone()[0]
+   # 'ISO, YMD'
+
+These GUC parameters only affects loading in text format; loading timestamps
+or intervals in :ref:`binary format <binary-data>` is not affected by
+DateStyle or IntervalStyle.
 
 
 .. _adapt-json:

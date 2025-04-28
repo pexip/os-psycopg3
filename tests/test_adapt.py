@@ -1,16 +1,20 @@
+from __future__ import annotations
+
 import datetime as dt
 from types import ModuleType
-from typing import Any, List
+from typing import Any
 
 import pytest
 
 import psycopg
-from psycopg import pq, sql, postgres
 from psycopg import errors as e
-from psycopg.adapt import Transformer, PyFormat, Dumper, Loader
+from psycopg import postgres, pq, sql
+from psycopg.abc import Buffer
+from psycopg.adapt import Dumper, Loader, PyFormat, Transformer
 from psycopg._cmodule import _psycopg
-from psycopg.postgres import types as builtins, TEXT_OID
-from psycopg.types.array import ListDumper, ListBinaryDumper
+from psycopg.postgres import types as builtins
+from psycopg.types.array import ListBinaryDumper, ListDumper
+from psycopg.types.string import StrBinaryDumper, StrDumper
 
 
 @pytest.mark.parametrize(
@@ -42,6 +46,20 @@ def test_dump(data, format, result, type):
     ],
 )
 def test_quote(data, result):
+    t = Transformer()
+    dumper = t.get_dumper(data, PyFormat.TEXT)
+    assert dumper.quote(data) == result
+
+
+@pytest.mark.parametrize(
+    "data, result",
+    [
+        ("hello", b"'hello'"),
+        ("", b"NULL"),
+    ],
+)
+def test_quote_none(data, result, global_adapters):
+    psycopg.adapters.register_dumper(str, StrNoneDumper)
     t = Transformer()
     dumper = t.get_dumper(data, PyFormat.TEXT)
     assert dumper.quote(data) == result
@@ -121,9 +139,6 @@ def test_dump_subclass(conn):
 
 
 def test_subclass_dumper(conn):
-    # This might be a C fast object: make sure that the Python code is called
-    from psycopg.types.string import StrDumper
-
     class MyStrDumper(StrDumper):
         def dump(self, obj):
             return (obj * 2).encode()
@@ -182,18 +197,21 @@ def test_cast(data, format, type, result):
 
 
 def test_register_loader_by_oid(conn):
-    assert TEXT_OID == 25
+    oid = builtins["text"].oid
+    assert oid == 25
     loader = make_loader("x")
-    assert conn.adapters.get_loader(TEXT_OID, pq.Format.TEXT) is not loader
-    conn.adapters.register_loader(TEXT_OID, loader)
-    assert conn.adapters.get_loader(TEXT_OID, pq.Format.TEXT) is loader
+    assert conn.adapters.get_loader(oid, pq.Format.TEXT) is not loader
+    conn.adapters.register_loader(oid, loader)
+    assert conn.adapters.get_loader(oid, pq.Format.TEXT) is loader
 
 
 def test_register_loader_by_type_name(conn):
+    oid = builtins["text"].oid
+    assert oid == 25
     loader = make_loader("x")
-    assert conn.adapters.get_loader(TEXT_OID, pq.Format.TEXT) is not loader
+    assert conn.adapters.get_loader(oid, pq.Format.TEXT) is not loader
     conn.adapters.register_loader("text", loader)
-    assert conn.adapters.get_loader(TEXT_OID, pq.Format.TEXT) is loader
+    assert conn.adapters.get_loader(oid, pq.Format.TEXT) is loader
 
 
 @pytest.mark.crdb("skip", reason="global adapters don't affect crdb")
@@ -306,7 +324,7 @@ def test_list_dumper(conn, fmt_out):
     assert dempty.oid == 0
     assert dempty.dump([]) == b"{}"
 
-    L: List[List[Any]] = []
+    L: list[list[Any]] = []
     L.append(L)
     with pytest.raises(psycopg.DataError):
         assert t.get_dumper(L, fmt_in)
@@ -345,12 +363,26 @@ def test_last_dumper_registered_ctx(conn):
     assert cur.execute("select %s", ["hello"]).fetchone()[0] == "hellob"
 
 
-@pytest.mark.parametrize("fmt_in", [PyFormat.TEXT, PyFormat.BINARY])
+@pytest.mark.parametrize("fmt_in", PyFormat)
 def test_none_type_argument(conn, fmt_in):
     cur = conn.cursor()
     cur.execute("create table none_args (id serial primary key, num integer)")
-    cur.execute("insert into none_args (num) values (%s) returning id", (None,))
+    cur.execute(
+        f"insert into none_args (num) values (%{fmt_in.value}) returning id", (None,)
+    )
     assert cur.fetchone()[0]
+
+
+@pytest.mark.parametrize("fmt_in", [PyFormat.TEXT, PyFormat.BINARY])
+def test_dump_to_none(conn, fmt_in):
+    cur = conn.cursor()
+    dumper = StrNoneDumper if fmt_in == PyFormat.TEXT else StrNoneBinaryDumper
+    cur.adapters.register_dumper(str, dumper)
+    cur.execute("create table none_args (id serial primary key, data text)")
+    for s in ["foo", ""]:
+        cur.execute("insert into none_args (data) values (%s)", (s,))
+    cur.execute("select data from none_args order by id")
+    assert cur.fetchall() == [("foo",), (None,)]
 
 
 @pytest.mark.crdb("skip", reason="test in crdb test suite")
@@ -395,10 +427,7 @@ def test_optimised_adapters():
         obj = getattr(_psycopg, n)
         if not isinstance(obj, type):
             continue
-        if not issubclass(
-            obj,
-            (_psycopg.CDumper, _psycopg.CLoader),  # type: ignore[attr-defined]
-        ):
+        if not issubclass(obj, (_psycopg.CDumper, _psycopg.CLoader)):
             continue
         c_adapters[n] = obj
 
@@ -490,11 +519,21 @@ class MyStr(str):
     pass
 
 
+class StrNoneDumper(StrDumper):
+    def dump(self, obj: str) -> Buffer | None:
+        return super().dump(obj) if obj else None
+
+
+class StrNoneBinaryDumper(StrBinaryDumper):
+    def dump(self, obj: str) -> Buffer | None:
+        return super().dump(obj) if obj else None
+
+
 def make_dumper(suffix):
     """Create a test dumper appending a suffix to the bytes representation."""
 
     class TestDumper(Dumper):
-        oid = TEXT_OID
+        oid = builtins["text"].oid
         format = pq.Format.TEXT
 
         def dump(self, s):

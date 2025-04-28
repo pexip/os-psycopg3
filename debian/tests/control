@@ -1,0 +1,9 @@
+Test-Command: PSYCOPG_IMPL=c pybuild-autopkgtest
+Depends: @, @builddeps@,
+Restrictions: allow-stderr, skippable,
+Features: test-name=pybuild-autopkgtest-c
+
+Test-Command: PSYCOPG_IMPL=python pybuild-autopkgtest
+Depends: @, @builddeps@,
+Restrictions: allow-stderr, skippable,
+Features: test-name=pybuild-autopkgtest-python

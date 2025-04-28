@@ -5,25 +5,26 @@ DNS query support
 
 # Copyright (C) 2021 The Psycopg Team
 
+from __future__ import annotations
+
 import os
 import re
 import warnings
 from random import randint
-from typing import Any, DefaultDict, Dict, List, NamedTuple, Optional, Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, DefaultDict, NamedTuple, Sequence
 from collections import defaultdict
 
 try:
-    from dns.resolver import Resolver, Cache
-    from dns.asyncresolver import Resolver as AsyncResolver
+    from dns.resolver import Cache, Resolver
     from dns.exception import DNSException
+    from dns.asyncresolver import Resolver as AsyncResolver
 except ImportError:
     raise ImportError(
         "the module psycopg._dns requires the package 'dnspython' installed"
     )
 
+from . import conninfo
 from . import errors as e
-from .conninfo import resolve_hostaddr_async as resolve_hostaddr_async_
 
 if TYPE_CHECKING:
     from dns.rdtypes.IN.SRV import SRV
@@ -35,7 +36,7 @@ async_resolver = AsyncResolver()
 async_resolver.cache = Cache()
 
 
-async def resolve_hostaddr_async(params: Dict[str, Any]) -> Dict[str, Any]:
+async def resolve_hostaddr_async(params: dict[str, Any]) -> dict[str, Any]:
     """
     Perform async DNS lookup of the hosts and return a new params dict.
 
@@ -48,15 +49,38 @@ async def resolve_hostaddr_async(params: Dict[str, Any]) -> Dict[str, Any]:
         "from psycopg 3.1, resolve_hostaddr_async() is not needed anymore",
         DeprecationWarning,
     )
-    return await resolve_hostaddr_async_(params)
+    hosts: list[str] = []
+    hostaddrs: list[str] = []
+    ports: list[str] = []
+
+    for attempt in await conninfo.conninfo_attempts_async(params):
+        if attempt.get("host") is not None:
+            hosts.append(attempt["host"])
+        if attempt.get("hostaddr") is not None:
+            hostaddrs.append(attempt["hostaddr"])
+        if attempt.get("port") is not None:
+            ports.append(str(attempt["port"]))
+
+    out = params.copy()
+    shosts = ",".join(hosts)
+    if shosts:
+        out["host"] = shosts
+    shostaddrs = ",".join(hostaddrs)
+    if shostaddrs:
+        out["hostaddr"] = shostaddrs
+    sports = ",".join(ports)
+    if ports:
+        out["port"] = sports
+
+    return out
 
 
-def resolve_srv(params: Dict[str, Any]) -> Dict[str, Any]:
+def resolve_srv(params: dict[str, Any]) -> dict[str, Any]:
     """Apply SRV DNS lookup as defined in :RFC:`2782`."""
     return Rfc2782Resolver().resolve(params)
 
 
-async def resolve_srv_async(params: Dict[str, Any]) -> Dict[str, Any]:
+async def resolve_srv_async(params: dict[str, Any]) -> dict[str, Any]:
     """Async equivalent of `resolve_srv()`."""
     return await Rfc2782Resolver().resolve_async(params)
 
@@ -65,7 +89,7 @@ class HostPort(NamedTuple):
     host: str
     port: str
     totry: bool = False
-    target: Optional[str] = None
+    target: str | None = None
 
 
 class Rfc2782Resolver:
@@ -77,7 +101,7 @@ class Rfc2782Resolver:
 
     re_srv_rr = re.compile(r"^(?P<service>_[^\.]+)\.(?P<proto>_[^\.]+)\.(?P<target>.+)")
 
-    def resolve(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def resolve(self, params: dict[str, Any]) -> dict[str, Any]:
         """Update the parameters host and port after SRV lookup."""
         attempts = self._get_attempts(params)
         if not attempts:
@@ -92,7 +116,7 @@ class Rfc2782Resolver:
 
         return self._return_params(params, hps)
 
-    async def resolve_async(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    async def resolve_async(self, params: dict[str, Any]) -> dict[str, Any]:
         """Update the parameters host and port after SRV lookup."""
         attempts = self._get_attempts(params)
         if not attempts:
@@ -107,7 +131,7 @@ class Rfc2782Resolver:
 
         return self._return_params(params, hps)
 
-    def _get_attempts(self, params: Dict[str, Any]) -> List[HostPort]:
+    def _get_attempts(self, params: dict[str, Any]) -> list[HostPort]:
         """
         Return the list of host, and for each host if SRV lookup must be tried.
 
@@ -146,14 +170,14 @@ class Rfc2782Resolver:
 
         return out if srv_found else []
 
-    def _resolve_srv(self, hp: HostPort) -> List[HostPort]:
+    def _resolve_srv(self, hp: HostPort) -> list[HostPort]:
         try:
             ans = resolver.resolve(hp.host, "SRV")
         except DNSException:
             ans = ()
         return self._get_solved_entries(hp, ans)
 
-    async def _resolve_srv_async(self, hp: HostPort) -> List[HostPort]:
+    async def _resolve_srv_async(self, hp: HostPort) -> list[HostPort]:
         try:
             ans = await async_resolver.resolve(hp.host, "SRV")
         except DNSException:
@@ -161,8 +185,8 @@ class Rfc2782Resolver:
         return self._get_solved_entries(hp, ans)
 
     def _get_solved_entries(
-        self, hp: HostPort, entries: "Sequence[SRV]"
-    ) -> List[HostPort]:
+        self, hp: HostPort, entries: Sequence[SRV]
+    ) -> list[HostPort]:
         if not entries:
             # No SRV entry found. Delegate the libpq a QNAME=target lookup
             if hp.target and hp.port.lower() != "srv":
@@ -181,8 +205,8 @@ class Rfc2782Resolver:
         ]
 
     def _return_params(
-        self, params: Dict[str, Any], hps: List[HostPort]
-    ) -> Dict[str, Any]:
+        self, params: dict[str, Any], hps: list[HostPort]
+    ) -> dict[str, Any]:
         if not hps:
             # Nothing found, we ended up with an empty list
             raise e.OperationalError("no host found after SRV RR lookup")
@@ -192,13 +216,13 @@ class Rfc2782Resolver:
         out["port"] = ",".join(str(hp.port) for hp in hps)
         return out
 
-    def sort_rfc2782(self, ans: "Sequence[SRV]") -> "List[SRV]":
+    def sort_rfc2782(self, ans: Sequence[SRV]) -> list[SRV]:
         """
         Implement the priority/weight ordering defined in RFC 2782.
         """
         # Divide the entries by priority:
-        priorities: DefaultDict[int, "List[SRV]"] = defaultdict(list)
-        out: "List[SRV]" = []
+        priorities: DefaultDict[int, list[SRV]] = defaultdict(list)
+        out: list[SRV] = []
         for entry in ans:
             priorities[entry.priority].append(entry)
 

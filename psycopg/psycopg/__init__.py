@@ -7,31 +7,29 @@ psycopg -- PostgreSQL database adapter for Python
 import logging
 
 from . import pq  # noqa: F401 import early to stabilize side effects
-from . import types
-from . import postgres
+from . import dbapi20, postgres, types
 from ._tpc import Xid
-from .copy import Copy, AsyncCopy
+from .copy import AsyncCopy, Copy
 from ._enums import IsolationLevel
 from .cursor import Cursor
-from .errors import Warning, Error, InterfaceError, DatabaseError
-from .errors import DataError, OperationalError, IntegrityError
-from .errors import InternalError, ProgrammingError, NotSupportedError
+from .errors import DatabaseError, DataError, Error, IntegrityError, InterfaceError
+from .errors import InternalError, NotSupportedError, OperationalError
+from .errors import ProgrammingError, Warning
 from ._column import Column
-from .conninfo import ConnectionInfo
-from ._pipeline import Pipeline, AsyncPipeline
-from .connection import BaseConnection, Connection, Notify
-from .transaction import Rollback, Transaction, AsyncTransaction
-from .cursor_async import AsyncCursor
-from .server_cursor import AsyncServerCursor, ServerCursor
-from .client_cursor import AsyncClientCursor, ClientCursor
-from .connection_async import AsyncConnection
-
-from . import dbapi20
-from .dbapi20 import BINARY, DATETIME, NUMBER, ROWID, STRING
-from .dbapi20 import Binary, Date, DateFromTicks, Time, TimeFromTicks
-from .dbapi20 import Timestamp, TimestampFromTicks
-
+from .dbapi20 import BINARY, DATETIME, NUMBER, ROWID, STRING, Binary, Date
+from .dbapi20 import DateFromTicks, Time, TimeFromTicks, Timestamp, TimestampFromTicks
 from .version import __version__ as __version__  # noqa: F401
+from ._pipeline import AsyncPipeline, Pipeline
+from .connection import Connection
+from .raw_cursor import AsyncRawCursor, AsyncRawServerCursor, RawCursor, RawServerCursor
+from .transaction import AsyncTransaction, Rollback, Transaction
+from .cursor_async import AsyncCursor
+from ._capabilities import Capabilities, capabilities
+from .client_cursor import AsyncClientCursor, ClientCursor
+from .server_cursor import AsyncServerCursor, ServerCursor
+from ._connection_base import BaseConnection, Notify
+from ._connection_info import ConnectionInfo
+from .connection_async import AsyncConnection
 
 # Set the logger to a quiet default, can be enabled if needed
 logger = logging.getLogger("psycopg")
@@ -46,6 +44,7 @@ paramstyle = "pyformat"
 
 # register default adapters for PostgreSQL
 adapters = postgres.adapters  # exposed by the package
+postgres.register_default_types(adapters.types)
 postgres.register_default_adapters(adapters)
 
 # After the default ones, because these can deal with the bytea oid better
@@ -63,9 +62,13 @@ __all__ = [
     "AsyncCopy",
     "AsyncCursor",
     "AsyncPipeline",
+    "AsyncRawCursor",
+    "AsyncRawServerCursor",
     "AsyncServerCursor",
     "AsyncTransaction",
     "BaseConnection",
+    "Capabilities",
+    "capabilities",
     "ClientCursor",
     "Column",
     "Connection",
@@ -75,6 +78,8 @@ __all__ = [
     "IsolationLevel",
     "Notify",
     "Pipeline",
+    "RawCursor",
+    "RawServerCursor",
     "Rollback",
     "ServerCursor",
     "Transaction",

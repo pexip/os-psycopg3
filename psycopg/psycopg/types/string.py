@@ -4,10 +4,12 @@ Adapters for textual types.
 
 # Copyright (C) 2020 The Psycopg Team
 
-from typing import Optional, Union, TYPE_CHECKING
+from __future__ import annotations
 
-from .. import postgres
-from ..pq import Format, Escaping
+from typing import TYPE_CHECKING
+
+from .. import _oids
+from ..pq import Escaping, Format
 from ..abc import AdaptContext
 from ..adapt import Buffer, Dumper, Loader
 from ..errors import DataError
@@ -18,7 +20,7 @@ if TYPE_CHECKING:
 
 
 class _BaseStrDumper(Dumper):
-    def __init__(self, cls: type, context: Optional[AdaptContext] = None):
+    def __init__(self, cls: type, context: AdaptContext | None = None):
         super().__init__(cls, context)
         enc = conn_encoding(self.connection)
         self._encoding = enc if enc != "ascii" else "utf-8"
@@ -33,7 +35,7 @@ class _StrBinaryDumper(_BaseStrDumper):
 
     format = Format.BINARY
 
-    def dump(self, obj: str) -> bytes:
+    def dump(self, obj: str) -> Buffer | None:
         # the server will raise DataError subclass if the string contains 0x00
         return obj.encode(self._encoding)
 
@@ -45,7 +47,7 @@ class _StrDumper(_BaseStrDumper):
     Subclasses shall specify the oids of real types (text, varchar, name...).
     """
 
-    def dump(self, obj: str) -> bytes:
+    def dump(self, obj: str) -> Buffer | None:
         if "\x00" in obj:
             raise DataError("PostgreSQL text fields cannot contain NUL (0x00) bytes")
         else:
@@ -56,15 +58,15 @@ class _StrDumper(_BaseStrDumper):
 
 
 class StrBinaryDumper(_StrBinaryDumper):
-    oid = postgres.types["text"].oid
+    oid = _oids.TEXT_OID
 
 
 class StrBinaryDumperVarchar(_StrBinaryDumper):
-    oid = postgres.types["varchar"].oid
+    oid = _oids.VARCHAR_OID
 
 
 class StrBinaryDumperName(_StrBinaryDumper):
-    oid = postgres.types["name"].oid
+    oid = _oids.NAME_OID
 
 
 class StrDumper(_StrDumper):
@@ -77,15 +79,15 @@ class StrDumper(_StrDumper):
     text oid is required, for instance with variadic functions.
     """
 
-    oid = postgres.types["text"].oid
+    oid = _oids.TEXT_OID
 
 
 class StrDumperVarchar(_StrDumper):
-    oid = postgres.types["varchar"].oid
+    oid = _oids.VARCHAR_OID
 
 
 class StrDumperName(_StrDumper):
-    oid = postgres.types["name"].oid
+    oid = _oids.NAME_OID
 
 
 class StrDumperUnknown(_StrDumper):
@@ -103,12 +105,12 @@ class StrDumperUnknown(_StrDumper):
 
 
 class TextLoader(Loader):
-    def __init__(self, oid: int, context: Optional[AdaptContext] = None):
+    def __init__(self, oid: int, context: AdaptContext | None = None):
         super().__init__(oid, context)
         enc = conn_encoding(self.connection)
         self._encoding = enc if enc != "ascii" else ""
 
-    def load(self, data: Buffer) -> Union[bytes, str]:
+    def load(self, data: Buffer) -> bytes | str:
         if self._encoding:
             if isinstance(data, memoryview):
                 data = bytes(data)
@@ -125,18 +127,20 @@ class TextBinaryLoader(TextLoader):
 
 
 class BytesDumper(Dumper):
-    oid = postgres.types["bytea"].oid
+    oid = _oids.BYTEA_OID
     _qprefix = b""
 
-    def __init__(self, cls: type, context: Optional[AdaptContext] = None):
+    def __init__(self, cls: type, context: AdaptContext | None = None):
         super().__init__(cls, context)
         self._esc = Escaping(self.connection.pgconn if self.connection else None)
 
-    def dump(self, obj: Buffer) -> Buffer:
+    def dump(self, obj: Buffer) -> Buffer | None:
         return self._esc.escape_bytea(obj)
 
-    def quote(self, obj: Buffer) -> bytes:
+    def quote(self, obj: Buffer) -> Buffer:
         escaped = self.dump(obj)
+        if escaped is None:
+            return b"NULL"
 
         # We cannot use the base quoting because escape_bytea already returns
         # the quotes content. if scs is off it will escape the backslashes in
@@ -163,16 +167,16 @@ class BytesDumper(Dumper):
 
 class BytesBinaryDumper(Dumper):
     format = Format.BINARY
-    oid = postgres.types["bytea"].oid
+    oid = _oids.BYTEA_OID
 
-    def dump(self, obj: Buffer) -> Buffer:
+    def dump(self, obj: Buffer) -> Buffer | None:
         return obj
 
 
 class ByteaLoader(Loader):
-    _escaping: "EscapingProto"
+    _escaping: EscapingProto
 
-    def __init__(self, oid: int, context: Optional[AdaptContext] = None):
+    def __init__(self, oid: int, context: AdaptContext | None = None):
         super().__init__(oid, context)
         if not hasattr(self.__class__, "_escaping"):
             self.__class__._escaping = Escaping()
@@ -205,7 +209,7 @@ def register_default_adapters(context: AdaptContext) -> None:
     adapters.register_dumper(str, StrDumper)
     adapters.register_dumper(str, StrDumperUnknown)
 
-    adapters.register_loader(postgres.INVALID_OID, TextLoader)
+    adapters.register_loader(_oids.INVALID_OID, TextLoader)
     adapters.register_loader("bpchar", TextLoader)
     adapters.register_loader("name", TextLoader)
     adapters.register_loader("text", TextLoader)
@@ -225,5 +229,5 @@ def register_default_adapters(context: AdaptContext) -> None:
     adapters.register_dumper(memoryview, BytesBinaryDumper)
 
     adapters.register_loader("bytea", ByteaLoader)
-    adapters.register_loader(postgres.INVALID_OID, ByteaBinaryLoader)
+    adapters.register_loader(_oids.INVALID_OID, ByteaBinaryLoader)
     adapters.register_loader("bytea", ByteaBinaryLoader)

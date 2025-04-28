@@ -1,18 +1,22 @@
+from __future__ import annotations
+
 import sys
 import asyncio
 import selectors
-from typing import Any, Dict, List
+from typing import Any
 
 import pytest
 
 pytest_plugins = (
     "tests.fix_db",
     "tests.fix_pq",
+    "tests.fix_dns",
     "tests.fix_mypy",
     "tests.fix_faker",
     "tests.fix_proxy",
     "tests.fix_psycopg",
     "tests.fix_crdb",
+    "tests.fix_gc",
     "tests.pool.fix_pool",
 )
 
@@ -25,8 +29,10 @@ def pytest_configure(config):
         # catch the exception for my life.
         "subprocess: the test import psycopg after subprocess",
         "timing: the test is timing based and can fail on cheese hardware",
+        "gevent: the test requires the gevent module to be installed",
         "dns: the test requires dnspython to run",
         "postgis: the test requires the PostGIS extension to run",
+        "numpy: the test requires numpy module to be installed",
     ]
 
     for marker in markers:
@@ -67,9 +73,11 @@ def pytest_sessionstart(session):
     cache.set("segfault", True)
 
 
-asyncio_options: Dict[str, Any] = {}
-if sys.platform == "win32" and sys.version_info >= (3, 8):
-    asyncio_options["policy"] = asyncio.WindowsSelectorEventLoopPolicy()
+asyncio_options: dict[str, Any] = {}
+if sys.platform == "win32":
+    asyncio_options["loop_factory"] = (
+        asyncio.WindowsSelectorEventLoopPolicy().new_event_loop
+    )
 
 
 @pytest.fixture(
@@ -83,7 +91,7 @@ def anyio_backend(request):
     return backend, options
 
 
-allow_fail_messages: List[str] = []
+allow_fail_messages: list[str] = []
 
 
 def pytest_sessionfinish(session, exitstatus):

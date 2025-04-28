@@ -30,14 +30,12 @@ Suggested usage::
 
 import inspect
 import logging
-from typing import Any, Callable, Type, TypeVar, TYPE_CHECKING
+from typing import Any, Callable
 from functools import wraps
 
-from . import PGconn
+from . import PGconn, abc
 from .misc import connection_summary
-
-if TYPE_CHECKING:
-    from . import abc
+from .._compat import Self, TypeVar
 
 Func = TypeVar("Func", bound=Callable[..., Any])
 
@@ -47,10 +45,9 @@ logger = logging.getLogger("psycopg.debug")
 class PGconnDebug:
     """Wrapper for a PQconn logging all its access."""
 
-    _Self = TypeVar("_Self", bound="PGconnDebug")
-    _pgconn: "abc.PGconn"
+    _pgconn: abc.PGconn
 
-    def __init__(self, pgconn: "abc.PGconn"):
+    def __init__(self, pgconn: abc.PGconn):
         super().__setattr__("_pgconn", pgconn)
 
     def __repr__(self) -> str:
@@ -71,11 +68,11 @@ class PGconnDebug:
         logger.info("PGconn.%s <- %s", attr, value)
 
     @classmethod
-    def connect(cls: Type[_Self], conninfo: bytes) -> _Self:
+    def connect(cls, conninfo: bytes) -> Self:
         return cls(debugging(PGconn.connect)(conninfo))
 
     @classmethod
-    def connect_start(cls: Type[_Self], conninfo: bytes) -> _Self:
+    def connect_start(cls, conninfo: bytes) -> Self:
         return cls(debugging(PGconn.connect_start)(conninfo))
 
     @classmethod
@@ -95,12 +92,17 @@ def debugging(f: Func) -> Func:
             reprs.append(f"{k}={v!r}")
 
         logger.info("PGconn.%s(%s)", f.__name__, ", ".join(reprs))
-        rv = f(*args, **kwargs)
-        # Display the return value only if the function is declared to return
-        # something else than None.
-        ra = inspect.signature(f).return_annotation
-        if ra is not None or rv is not None:
-            logger.info("    <- %r", rv)
-        return rv
+        try:
+            rv = f(*args, **kwargs)
+        except Exception as ex:
+            logger.info("    <- %r", ex)
+            raise
+        else:
+            # Display the return value only if the function is declared to return
+            # something else than None.
+            ra = inspect.signature(f).return_annotation
+            if ra is not None or rv is not None:
+                logger.info("    <- %r", rv)
+            return rv
 
     return debugging_  # type: ignore
