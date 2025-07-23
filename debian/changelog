@@ -1,3 +1,9 @@
+psycopg3 (3.1.10-1+pexip24u4) pexip; urgency=medium
+
+  * Bump version
+
+ -- John-Mark Bell <jmb@pexip.com>  Wed, 23 Jul 2025 17:59:47 +0100
+
 psycopg3 (3.1.10-1+pexip24u3) pexip; urgency=medium
 
   * Bump version
